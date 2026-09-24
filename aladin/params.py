@@ -270,15 +270,52 @@ def _rating(rating, errors: list[str]) -> str:
     return rating or default_rating()
 
 
-def director_params(brief: str, count: int | None = None,
-                    rating: str | None = None) -> tuple[dict, list[str]]:
-    from .planner_schema import MAX_BRIEF_CHARS, MIN_IMAGES, MAX_IMAGES
+def director_params(brief: str, count: int | None = None, rating: str | None = None,
+                    model: str | None = None, loras=None,
+                    review: bool = False, preset: str | None = None) -> tuple[dict, list[str]]:
+    """一句话出图：需求、张数、尺度、目标模型、LoRA（整批共用）、是否先看计划再生成、预设。
+
+    预设 manga 的张数就是一页的格数（4–8，默认 6），版式随格数定。
+    """
+    from .planner_schema import (MANGA_DEFAULT, MANGA_LAYOUTS, MANGA_MAX, MANGA_MIN,
+                                 MAX_BRIEF_CHARS, MAX_IMAGES, MIN_IMAGES, PRESETS)
     errors = []
+    if preset is not None and preset not in PRESETS:
+        errors.append('未知的预设：' + ' / '.join(PRESETS))
+        preset = None
     brief = (brief or '').strip()
     if not brief:
         errors.append('请描述你想要的画面')
     elif len(brief) > MAX_BRIEF_CHARS:
         errors.append(f'需求最多 {MAX_BRIEF_CHARS} 字符')
-    if count is not None and (type(count) is not int or not MIN_IMAGES <= count <= MAX_IMAGES):
+    if preset == 'manga':
+        count = MANGA_DEFAULT if count is None else count
+        if type(count) is not int or count not in MANGA_LAYOUTS:
+            errors.append(f'漫画格数需在 {MANGA_MIN}–{MANGA_MAX} 之间')
+    elif count is not None and (type(count) is not int or not MIN_IMAGES <= count <= MAX_IMAGES):
         errors.append(f'张数需在 {MIN_IMAGES}–{MAX_IMAGES} 之间，或留空由模型决定')
-    return {'count': count, 'stage': 'planning', 'rating': _rating(rating, errors)}, errors
+    model = model or DEFAULT_MODEL
+    if model not in MODELS:
+        errors.append('未知的生图模型')
+        model = DEFAULT_MODEL
+    from .loras import resolve
+    chosen, lora_errors = resolve(loras, model)
+    errors.extend(lora_errors)
+    if preset == 'manga':
+        from .loras import BY_ID
+        # LoRA 对每一格都生效：体位 / 视角类会让整页同一个姿势，故事就没了
+        posed = [BY_ID[l['id']]['name'] for l in chosen if BY_ID[l['id']]['kind'] == 'pose']
+        if posed:
+            errors.append('漫画预设不能用体位 / 视角类 LoRA（会让每一格同一个姿势）：' + '、'.join(posed))
+        # 漫画生成器类 LoRA 一张图就出一整页多格，放进逐格分镜里会变成「格中格」
+        paged = [BY_ID[l['id']]['name'] for l in chosen if BY_ID[l['id']].get('group') == 'comic']
+        if paged:
+            errors.append('漫画预设已经逐格分镜，不能再用整页漫画生成器 LoRA：' + '、'.join(paged))
+    if not isinstance(review, bool):
+        errors.append('review 必须是布尔值')
+        review = False
+    built = {'count': count, 'stage': 'planning', 'rating': _rating(rating, errors),
+             'model': model, 'loras': chosen, 'review': review}
+    if preset:
+        built['preset'] = preset
+    return built, errors

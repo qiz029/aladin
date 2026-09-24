@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from psycopg.errors import UniqueViolation
 
 from . import billing, cleanup, db, director, gallery, params as rules, pipeline, settings
+from .planner_schema import BEATS, MANGA_DEFAULT, MANGA_LAYOUTS, MANGA_MAX, MANGA_MIN, PRESETS, SHOTS, manga_layout
 
 router = APIRouter(prefix='/api/v1')
 
@@ -35,6 +36,10 @@ class DirectorRequest(BaseModel):
     brief: str = Field(..., description='描述需求，最多 4000 字符')
     count: int | None = Field(None, strict=True, description='可选 1–8 张；省略由模型决定')
     rating: str | None = Field(None, description='尺度：general 日常 / suggestive 暗示 / explicit 露骨；省略用服务端默认')
+    model: str = Field('qwen-image-2.1', description='目标模型：qwen-image-2.1 / pony-realism-2.2 / anima-base-1.0')
+    loras: list['LoraChoice'] | None = Field(None, description='整批共用的 LoRA（仅 Pony / Anima）')
+    review: bool = Field(False, description='true：规划完停在 review，调用 /jobs/{id}/approve 确认后才生成')
+    preset: Literal['manga'] | None = Field(None, description='预设：manga = 日式漫画一页多格（count 为格数 4–8，默认 6）')
 
 
 class ArtifactReview(BaseModel):
@@ -58,6 +63,9 @@ def review_artifact(job_id: str, name: str, body: ArtifactReview):
 class LoraChoice(BaseModel):
     id: str = Field(..., description='LoRA id，见 GET /api/v1/loras')
     strength: float | None = Field(None, description='强度；省略用目录里的默认值')
+
+
+DirectorRequest.model_rebuild()     # DirectorRequest 引用了在它之后定义的 LoraChoice
 
 
 class ImageRequest(BaseModel):
@@ -181,7 +189,7 @@ def _job_json(row: dict, include_progress: bool = True, extras: dict | None = No
         'finished_at': row.get('finished_at'), 'attempts': row.get('attempts'),
         'artifacts': artifacts,
         'plan': row['params'].get('plan'),
-        'stage': ('planning' if director.is_planning(row) else 'generating') if row.get('mode') == 'director' else None,
+        'stage': director_stage(row),
         'generation_request': row['request'],
         'input_url': (f'/api/v1/jobs/{job_id}/input') if row.get('input_path') else None,
         'links': {'self': f'/api/v1/jobs/{job_id}', 'page': f'/jobs/{job_id}',
@@ -191,6 +199,64 @@ def _job_json(row: dict, include_progress: bool = True, extras: dict | None = No
     if include_progress:
         body['progress'] = progress_view(extras['progress'].get(job_id))
     return jsonable_encoder(body)
+
+
+def director_stage(row: dict) -> str | None:
+    if row.get('mode') != 'director':
+        return None
+    if director.is_planning(row):
+        return 'planning'
+    return 'review' if row['state'] == 'review' else 'generating'
+
+
+class DialogueLine(BaseModel):
+    speaker: str = Field('', max_length=20)
+    text: str = Field(..., max_length=60)
+
+
+class PlanEdit(BaseModel):
+    """review 阶段对一张图的修改；prompt 写原始提示词（不含自动标签与触发词）。"""
+    prompt: str = Field(..., max_length=2000)
+    negative: str = Field('', max_length=2000)
+    size: str | None = Field(None, description='漫画预设下由格子决定，忽略')
+    steps: int
+    cfg: float
+    seed: int
+    rationale: str = Field('', max_length=300)
+    # 以下仅漫画预设；省略则保持原格的值
+    rating: Literal['general', 'suggestive', 'explicit'] | None = None
+    beat: str | None = None
+    shot: str | None = None
+    action: str | None = Field(None, max_length=300)
+    caption: str | None = Field(None, max_length=80)
+    dialogue: list[DialogueLine] | None = Field(None, max_length=2)
+    characters: list[int] | None = None
+
+
+class ApproveRequest(BaseModel):
+    variants: list[PlanEdit] | None = Field(None, description='省略 = 原样确认；给了就整体替换（可删、可改）')
+
+
+@router.post('/jobs/{job_id}/approve')
+def approve_plan(job_id: str, body: ApproveRequest | None = None) -> dict:
+    """确认一句话出图的计划（仅 review 状态），可以带修改。之后照常排队生成。"""
+    row = db.job(job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='任务不存在')
+    if row.get('mode') != 'director' or row['state'] != 'review':
+        raise HTTPException(status_code=409, detail='只有等待确认的一句话出图任务可以确认')
+    edits = (None if body is None or body.variants is None
+             else [v.model_dump(exclude_none=True) for v in body.variants])
+    try:
+        request, params = director.approve(row, edits)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=[str(error)]) from None
+    params['stage'] = 'generating'
+    if not db.approve_plan(job_id, request, params):
+        raise HTTPException(status_code=409, detail='计划已经确认过了')
+    db.add_event(job_id, 'approved', f"计划已确认，开始生成 {params['images']} 张图片")
+    db.notify(job_id)
+    return _job_json(db.job(job_id))
 
 
 def _submit(prompt: str, images: int, built: dict, mode: str = 'txt2img',
@@ -251,7 +317,10 @@ def capabilities() -> dict:
             'params': '/api/v1/params',
             'loras': {'method': 'GET', 'path': '/api/v1/loras',
                       'body': '文生图可带 loras: [{id, strength}]，仅 Pony / Anima'},
-            'director': {'method': 'POST', 'path': '/api/v1/director', 'body': 'application/json（brief，可选 count）'},
+            'director': {'method': 'POST', 'path': '/api/v1/director',
+                         'body': 'application/json（brief；可选 count、rating、model、loras、review、preset）'},
+            'director_approve': {'method': 'POST', 'path': '/api/v1/jobs/{id}/approve',
+                                 'body': 'review 状态的一句话出图：可选 variants 整体替换计划'},
             'text_to_image': {'method': 'POST', 'path': '/api/v1/images',
                               'body': 'application/json'},
             'edit_image': {'method': 'POST', 'path': '/api/v1/edits',
@@ -332,7 +401,11 @@ def parameter_bounds() -> dict:
         'schedulers': settings.SCHEDULERS,
         'edit_modes': settings.MODES,
         'max_upload_bytes': settings.MAX_UPLOAD_BYTES,
-        'director': {'brief_chars': 4000, 'count': [1, 8], 'default_count': None},
+        'director': {'brief_chars': 4000, 'count': [1, 8], 'default_count': None,
+                     'presets': {'manga': {'label': PRESETS['manga'], 'count': [MANGA_MIN, MANGA_MAX],
+                                           'default_count': MANGA_DEFAULT,
+                                           'layouts': {n: manga_layout(n) for n in MANGA_LAYOUTS},
+                                           'beats': BEATS, 'shots': SHOTS}}},
         'video': {
             'durations': settings.VIDEO_DURATIONS,
             'sizes': settings.VIDEO_SIZES,
@@ -654,15 +727,17 @@ def remove_gallery(item_id: int) -> dict:
     return {'removed': item_id}
 
 
-def submit_director(brief: str, count: int | None = None,
-                    rating: str | None = None) -> tuple[str, bool]:
-    built, errors = rules.director_params(brief, count, rating)
+def submit_director(brief: str, count: int | None = None, rating: str | None = None,
+                    model: str | None = None, loras=None, review: bool = False,
+                    preset: str | None = None) -> tuple[str, bool]:
+    built, errors = rules.director_params(brief, count, rating, model, loras, review, preset)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     try:
-        return pipeline.enqueue(brief.strip(), count or 1, built, mode='director'), True
+        return pipeline.enqueue(brief.strip(), built['count'] or 1, built, mode='director'), True
     except UniqueViolation:
-        row = db.job_by_result_key(director.build(brief, count, built['rating'])['key'])
+        row = db.job_by_result_key(director.build(brief, built['count'], built['rating'], built['model'],
+                                                  built['loras'], built.get('preset'))['key'])
         if row is None:
             raise HTTPException(status_code=409, detail='相同需求任务已存在') from None
         return row['id'], False
@@ -671,5 +746,7 @@ def submit_director(brief: str, count: int | None = None,
 @router.post('/director', status_code=202)
 async def create_director(body: DirectorRequest, wait: bool = Query(False),
                           timeout: int = Query(WAIT_DEFAULT_SECONDS)):
-    job_id, created = submit_director(body.brief, body.count, body.rating)
+    job_id, created = submit_director(
+        body.brief, body.count, body.rating, body.model,
+        [c.model_dump(exclude_none=True) for c in body.loras or []], body.review, body.preset)
     return await _respond(job_id, created, wait, timeout)

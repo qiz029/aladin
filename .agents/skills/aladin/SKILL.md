@@ -32,7 +32,7 @@ file aladin-out/4d65cf27121640ca82d059d20c65c52b/image-01.png
 
 | 命令 | 用途 |
 | --- | --- |
-| `director "描述想法" [--count 2] --wait` | 自动规划 1–8 张并逐张生图，保留全部参数 |
+| `director "描述想法" [--count 2] [--preset manga] --wait` | 自动规划 1–8 张并逐张生图，保留全部参数；manga 为一页多格漫画 |
 | `submit "提示词" --size square --steps 25 [--seed 42] --wait` | 文生图（省略 `--seed` 为随机） |
 | `edit --image in.png --mode img2img --denoise 0.6 --prompt "" --wait` | 以图为起点重画 |
 | `edit --image in.png --mode edit --prompt "把杯子换成蓝色" --wait` | 按指令改图 |
@@ -145,6 +145,34 @@ CLI 对应 `--rating`。服务端按模型把尺度换成该模型认的词，**
 实时的表以 `GET /api/v1/params` 的 `prompt_defaults` 为准。提示词里已有的词大小写不敏感去重；负向词不变。
 任务 `params.prompt_defaults` 保存 original / effective / tags / rating / family，任务页可展开看实际发送的内容；
 「再来一张」沿用原任务的配置。尺度参与幂等键：同提示词换尺度是新任务。加上标签后超过 2000 字符会被拒绝，不截断。
+
+## 一句话出图：选模型、LoRA、先看计划
+
+`POST /api/v1/director` 除 `brief` / `count` / `rating` 外还接受：
+- `model`：`qwen-image-2.1`（默认）/ `pony-realism-2.2` / `anima-base-1.0`。planner 按目标模型的写法写提示词
+  （Qwen 自然语言；Pony 以 score_9 开头的标签并写负向词；Anima 以 masterpiece 开头的 Danbooru 标签），
+  尺寸、步数、CFG 也落在该模型的范围内。
+- `loras`：整批共用的 LoRA（仅 Pony / Anima），同生图接口。planner 会被告知启用了哪些，写提示词时配合；
+  触发词自动补。Anima Turbo 会把步数收窄到 8–12、CFG 固定为 1。
+- `review: true`：规划完停在 `state = review`（`stage = review`），不花生图的 GPU。
+  `POST /api/v1/jobs/{id}/approve` 确认：不带 body 原样确认；带 `{"variants": [...]}` 整体替换
+  （每项 prompt / negative / size / steps / cfg / seed，prompt 写原文，标签与触发词会自动补）。review 中的任务可以直接 DELETE。
+- CLI：`director "…" --model pony-realism-2.2 --lora style-photo-2 --review`，然后 `approve <job_id>`。
+
+## 一句话出图：漫画预设（`preset: "manga"`）
+
+一页多格的日式漫画：planner **先写故事**（`plan.story` 标题 / 梗概 / 场景、`plan.characters` 固定外貌），
+再按版式逐格分镜。`count` 是格数（4–8，默认 6），版式随格数定，从右上开始右→左、上→下阅读；
+每格尺寸由格子形状决定，不用传 size。版式坐标见 `GET /api/v1/params` 的 `director.presets.manga.layouts`。
+- 每个 `plan.variants[]` 带 `panel`：`index`、`rect`（页面比例 x, y, w, h）、`beat`（setup/build/turn/climax/aftermath）、
+  `shot`、`rating`、`characters`（角色下标）、`action`、`caption`、`dialogue: [{speaker, text}]`。
+- **尺度按格给**：请求的 `rating` 是上限，每格的 `panel.rating` 可以更低（铺垫格通常是 general / suggestive），
+  标签按每格的尺度补。
+- 对白与旁白只存在计划里，**不画进图**（拼页和对白框排版尚未实现）。
+- 体位 / 视角类 LoRA（会让每格同一个姿势）和整页漫画生成器 LoRA（`hentai-comic-*`，会变成格中格）在此预设下 422；画风、画质和其他概念类可以用。
+- approve 时不能增删格：`variants` 必须与原计划等长，按位置覆盖，可改 prompt / negative / steps / cfg / seed /
+  rating / action / caption / dialogue，省略的字段保持原样。
+- CLI：`director "…" --preset manga --count 6 --model anima-base-1.0 --review`。
 
 ## LoRA（仅 Pony / Anima）
 

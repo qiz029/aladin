@@ -100,10 +100,13 @@ def enqueue(prompt: str, images: int, params: dict, mode: str = 'txt2img',
     """
     if mode == 'director':
         from .params import director_params
-        built, errors = director_params(prompt, params.get('count'), params.get('rating'))
+        built, errors = director_params(prompt, params.get('count'), params.get('rating'),
+                                        params.get('model'), params.get('loras'),
+                                        params.get('review', False), params.get('preset'))
         if errors:
             raise ValueError('；'.join(errors))
-        request = director.build(prompt, built['count'], built['rating'])
+        request = director.build(prompt, built['count'], built['rating'], built['model'],
+                                 built['loras'], built.get('preset'))
         return db.create_job(prompt.strip(), built, request, request['key'], mode='director')
     params = prepare(prompt, params)
     effective = params['prompt_defaults']['effective']
@@ -531,7 +534,12 @@ def _read_bytes(volume: Any, path: str) -> bytes:
 
 def _accept_plan(row: dict, plan: dict) -> str:
     request, params = director.image_batch(row, plan)
-    if db.accept_plan(row, request, params):
-        db.add_event(row['id'], 'planned', f"规划完成，开始生成 {params['images']} 张图片")
+    # 「先看计划再生成」：停在 review，等人确认；否则直接排队生成
+    state = 'review' if params.get('review') else 'pending'
+    params['stage'] = 'review' if state == 'review' else 'generating'
+    if db.accept_plan(row, request, params, state=state):
+        message = (f"规划完成，共 {params['images']} 张，等待确认后生成" if state == 'review'
+                   else f"规划完成，开始生成 {params['images']} 张图片")
+        db.add_event(row['id'], 'planned', message)
         db.notify(row['id'])
-    return 'pending'
+    return state

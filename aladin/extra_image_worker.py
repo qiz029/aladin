@@ -12,7 +12,29 @@ import uuid
 
 from . import worker as runtime
 from .image_models import MODELS, DEFAULT_MODEL, COMFY_REVISION
-from .extra_image_request import build
+from .extra_image_request import build, build_variants
+
+
+def _check_variant(spec, variant, index):
+    """一张图的参数：与宿主侧 params.image_params 同一套边界。"""
+    prompt = variant.get('prompt')
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 2000:
+        raise ValueError(f'Invalid prompt (image {index})')
+    if not isinstance(variant.get('negative'), str) or len(variant['negative']) > 2000:
+        raise ValueError(f'Invalid negative prompt (image {index})')
+    size = spec['sizes'].get(variant.get('size'))
+    if not size or (variant.get('width'), variant.get('height')) != (size['width'], size['height']):
+        raise ValueError(f'Invalid size (image {index})')
+    steps = variant.get('steps')
+    if type(steps) is not int or not spec['steps'][0] <= steps <= spec['steps'][1]:
+        raise ValueError(f'Invalid steps (image {index})')
+    cfg = variant.get('cfg')
+    if isinstance(cfg, bool) or not isinstance(cfg, (int, float)) or not math.isfinite(cfg) or not 0 <= cfg <= 10:
+        raise ValueError(f'Invalid CFG (image {index})')
+    seed = variant.get('seed')
+    if type(seed) is not int or not 0 <= seed <= 2**63 - 1:
+        raise ValueError(f'Invalid seed (image {index})')
+    validate_loras(variant.get('loras', []))
 
 
 def validate(request):
@@ -20,32 +42,59 @@ def validate(request):
     if model not in MODELS or model == DEFAULT_MODEL:
         raise ValueError('Unsupported model')
     spec = MODELS[model]
+    if 'variants' in request:
+        # 一句话出图：每张图自带参数与 LoRA
+        variants = request['variants']
+        if not isinstance(variants, list) or not 1 <= len(variants) <= 8:
+            raise ValueError('Invalid image count')
+        if not isinstance(request.get('key'), str) or not re.fullmatch(r'[0-9a-f]{64}', request['key']):
+            raise ValueError('Invalid key')
+        if request.get('sampler') not in spec['samplers'] or request.get('scheduler') not in spec['schedulers']:
+            raise ValueError('Unsupported sampler/scheduler')
+        for index, variant in enumerate(variants, start=1):
+            if not isinstance(variant, dict):
+                raise ValueError(f'Invalid image {index}')
+            _check_variant(spec, variant, index)
+        if build_variants(request['key'], model, variants, request['sampler'], request['scheduler']) != request:
+            raise ValueError('Request or worker revision mismatch')
+        return request
     params = request['params']
     prompts = request['prompts']
     if not isinstance(prompts, list) or not 1 <= len(prompts) <= 8:
         raise ValueError('Invalid image count')
-    if any(not isinstance(p, str) or not p.strip() or len(p) > 2000 for p in prompts):
-        raise ValueError('Invalid prompt')
     if len(set(prompts)) != 1 or params['model'] != model:
         raise ValueError('Inconsistent request')
-    if not isinstance(params['negative'], str) or len(params['negative']) > 2000:
-        raise ValueError('Invalid negative prompt')
-    size = spec['sizes'].get(params['size'])
-    if not size or (params['width'], params['height']) != (size['width'], size['height']):
-        raise ValueError('Invalid size')
-    if type(params['steps']) is not int or not spec['steps'][0] <= params['steps'] <= spec['steps'][1]:
-        raise ValueError('Invalid steps')
-    if not math.isfinite(params['cfg']) or not 0 <= params['cfg'] <= 10:
-        raise ValueError('Invalid CFG')
-    if type(params['seed']) is not int or not 0 <= params['seed'] <= 2**63 - 1:
-        raise ValueError('Invalid seed')
+    for index, variant in enumerate(variants_of(request), start=1):
+        _check_variant(spec, variant, index)
     if params['sampler'] not in spec['samplers'] or params['scheduler'] not in spec['schedulers']:
         raise ValueError('Unsupported sampler/scheduler')
-    validate_loras(request.get('loras', []))
     rebuilt_params = dict(params, loras=[dict(item) for item in request.get('loras', [])])
     if build(prompts[0], len(prompts), rebuilt_params) != request:
         raise ValueError('Request or worker revision mismatch')
     return request
+
+
+def variants_of(request):
+    """两种请求形状归一成「每张图一套参数」：页面文生图（同一提示词 × N，种子递增）与一句话出图的批量。
+
+    归一之后，工作流、执行与产物记录只处理这一种形状。
+    """
+    if 'variants' in request:
+        return [dict(item) for item in request['variants']]
+    p = request['params']
+    return [dict(prompt=prompt, negative=p['negative'], size=p['size'], width=p['width'],
+                 height=p['height'], steps=p['steps'], cfg=p['cfg'], seed=p['seed'] + index,
+                 loras=list(request.get('loras', [])))
+            for index, prompt in enumerate(request['prompts'])]
+
+
+def sampling(request):
+    source = request if 'variants' in request else request['params']
+    return source['sampler'], source['scheduler']
+
+
+def save_node(index):
+    return str(15 + index * 6)
 
 
 LORA_FILE = re.compile(r'^civitai-\d+\.safetensors$')
@@ -112,35 +161,44 @@ def ensure_weights(model, root):
 
 
 def workflow(request):
-    p = request['params']
     graph = {}
     if request['modelId'] == 'anima-base-1.0':
         graph.update({
             '1': dict(class_type='UNETLoader', inputs=dict(unet_name='anima-base-v1.0.safetensors', weight_dtype='default')),
             '2': dict(class_type='CLIPLoader', inputs=dict(clip_name='qwen_3_06b_base.safetensors', type='stable_diffusion', device='default')),
             '3': dict(class_type='VAELoader', inputs=dict(vae_name='qwen_image_vae.safetensors'))})
-        model, clip, vae = ['1', 0], ['2', 0], ['3', 0]
+        base_model, base_clip, vae = ['1', 0], ['2', 0], ['3', 0]
     else:
         graph.update({
             '1': dict(class_type='CheckpointLoaderSimple', inputs=dict(ckpt_name='ponyRealism_v22MainVAE.safetensors')),
             '2': dict(class_type='CLIPSetLastLayer', inputs=dict(clip=['1', 1], stop_at_clip_layer=-2))})
-        model, clip, vae = ['1', 0], ['2', 0], ['1', 2]
+        base_model, base_clip, vae = ['1', 0], ['2', 0], ['1', 2]
+    sampler_name, scheduler = sampling(request)
     # LoRA 串在加载器之后：每个 LoraLoader 同时改模型与文本编码器，后一个接前一个的输出。
-    # 叠加是加法，顺序不影响结果；节点号用 200+ 以免与采样节点冲突。
-    for index, item in enumerate(request.get('loras', [])):
-        node = str(200 + index)
-        graph[node] = dict(class_type='LoraLoader', inputs=dict(
-            model=model, clip=clip, lora_name=item['file'],
-            strength_model=item['strength'], strength_clip=item['strength']))
-        model, clip = [node, 0], [node, 1]
-    graph['4'] = dict(class_type='CLIPTextEncode', inputs=dict(text=p['negative'], clip=clip))
-    graph['5'] = dict(class_type='EmptyLatentImage', inputs=dict(width=p['width'], height=p['height'], batch_size=1))
-    for index, prompt in enumerate(request['prompts']):
-        positive, sampler, decode, save = (str(10 + index * 4 + n) for n in range(4))
-        graph[positive] = dict(class_type='CLIPTextEncode', inputs=dict(text=prompt, clip=clip))
-        graph[sampler] = dict(class_type='KSampler', inputs=dict(model=model, positive=[positive, 0], negative=['4', 0], latent_image=['5', 0], seed=p['seed'] + index, steps=p['steps'], cfg=p['cfg'], sampler_name=p['sampler'], scheduler=p['scheduler'], denoise=1.0))
+    # 叠加是加法，顺序不影响结果。同一套 LoRA 的图共用一条链；节点号用 200+ 以免与采样节点冲突。
+    chains, next_node = {}, 200
+    for index, variant in enumerate(variants_of(request)):
+        loras = variant.get('loras', [])
+        signature = json.dumps(loras, sort_keys=True)
+        if signature not in chains:
+            model, clip = base_model, base_clip
+            for item in loras:
+                node = str(next_node)
+                next_node += 1
+                graph[node] = dict(class_type='LoraLoader', inputs=dict(
+                    model=model, clip=clip, lora_name=item['file'],
+                    strength_model=item['strength'], strength_clip=item['strength']))
+                model, clip = [node, 0], [node, 1]
+            chains[signature] = (model, clip)
+        model, clip = chains[signature]
+        positive, negative, latent, sampler, decode, save = (str(10 + index * 6 + n) for n in range(6))
+        graph[positive] = dict(class_type='CLIPTextEncode', inputs=dict(text=variant['prompt'], clip=clip))
+        graph[negative] = dict(class_type='CLIPTextEncode', inputs=dict(text=variant['negative'], clip=clip))
+        graph[latent] = dict(class_type='EmptyLatentImage', inputs=dict(width=variant['width'], height=variant['height'], batch_size=1))
+        graph[sampler] = dict(class_type='KSampler', inputs=dict(model=model, positive=[positive, 0], negative=[negative, 0], latent_image=[latent, 0], seed=variant['seed'], steps=variant['steps'], cfg=variant['cfg'], sampler_name=sampler_name, scheduler=scheduler, denoise=1.0))
         graph[decode] = dict(class_type='VAEDecode', inputs=dict(samples=[sampler, 0], vae=vae))
         graph[save] = dict(class_type='SaveImage', inputs=dict(images=[decode, 0], filename_prefix='aladin'))
+    assert save == save_node(index)
     return graph
 
 
@@ -177,7 +235,8 @@ def execute(request, result_root):
         return cached
     root = Path('/models')
     ensure_weights(request['modelId'], root)
-    ensure_loras(request.get('loras', []), root)
+    variants = variants_of(request)
+    ensure_loras([item for variant in variants for item in variant.get('loras', [])], root)
     process, log = start_server(root)
     try:
         graph = workflow(request)
@@ -190,8 +249,9 @@ def execute(request, result_root):
         if not history or history[prompt_id].get('status', {}).get('status_str') == 'error':
             raise RuntimeError('ComfyUI execution failed: ' + str(history)[:1500])
         images = []
-        for index, prompt in enumerate(request['prompts']):
-            item = history[prompt_id]['outputs'][str(13 + index * 4)]['images'][0]
+        sampler_name, scheduler = sampling(request)
+        for index, variant in enumerate(variants):
+            item = history[prompt_id]['outputs'][save_node(index)]['images'][0]
             data = runtime.fetch_image(item, time.time() + 120)
             if len(data) > runtime.MAX_IMAGE:
                 raise ValueError('Image exceeds size limit')
@@ -199,13 +259,14 @@ def execute(request, result_root):
             tmp = output / (name + '.tmp')
             tmp.write_bytes(data)
             tmp.replace(output / name)
-            seed = request['params']['seed'] + index
-            params = dict(request['params'], seed=seed)
-            if request.get('loras'):
-                params['loras'] = request['loras']
+            # 产物级参数：逐张记下，批量里每张都可能不同
+            params = {k: variant[k] for k in ('negative', 'size', 'width', 'height', 'steps', 'cfg', 'seed')}
+            params.update(model=request['modelId'], sampler=sampler_name, scheduler=scheduler)
+            if variant.get('loras'):
+                params['loras'] = variant['loras']
             if request['modelId'] == 'pony-realism-2.2':
                 params['clip_skip'] = 2
-            images.append(dict(index=index+1, file=name, sha256=runtime.digest(data), bytes=len(data), format='png', prompt=prompt, seed=seed, params=params))
+            images.append(dict(index=index+1, file=name, sha256=runtime.digest(data), bytes=len(data), format='png', prompt=variant['prompt'], seed=variant['seed'], params=params))
         record = dict(schemaVersion=1, request=request, mode='txt2img', model=request['model'], elapsedSeconds=round(time.time()-started, 2), images=images)
         runtime.atomic_json(output / 'result.json', record)
         return record

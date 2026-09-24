@@ -17,7 +17,35 @@
         <button type="button" class="ghost sm" data-example="一座雨夜里的未来城市，霓虹映在湿润的路面。用不同角度表现孤独感，电影构图，不要文字。">电影场景 ↗</button>
         <button type="button" class="ghost sm" data-example="为一本儿童绘本画三张森林小屋插图，水彩风格，清晨、午后和夜晚各一张，保持小屋外观一致。">系列插画 ↗</button>
       </div>
-      {{ rating_field('qwen') }}
+      <div class="field director-preset">
+        <label>创作方式</label>
+        <div class="chips">
+          <label class="chip"><input type="radio" name="preset" value="" checked> <span>自由规划</span><span class="hint">几张各不相同的图</span></label>
+          {% for key, label in presets.items() %}
+          <label class="chip"><input type="radio" name="preset" value="{{ key }}"> <span>{{ label }}</span><span class="hint">先写故事，再分镜</span></label>
+          {% endfor %}
+        </div>
+        <div class="bar-row mt-2" id="mangaOptions" hidden>
+          <div class="w-md"><label for="count">格数</label>
+            <select id="count" name="count" disabled>
+              {% for n in manga_counts %}<option value="{{ n }}" {% if n == manga_default %}selected{% endif %}>{{ n }} 格</option>{% endfor %}
+            </select></div>
+          <p class="small muted grow">从右上开始右→左阅读。planner 先写故事梗概和人物外貌，再按版式分镜，
+            尺度逐格递进（不超过下面选的上限）；对白和旁白随计划保存。体位类和整页漫画生成器 LoRA 在此模式下不可用。</p>
+        </div>
+      </div>
+      <div class="field director-model">
+        <label for="model">用哪个模型生成</label>
+        <select id="model" name="model">
+          {% for key, spec in image_models.items() %}
+          <option value="{{ key }}" {% if loop.first %}selected{% endif %}>{{ spec.label }}</option>
+          {% endfor %}
+        </select>
+        <p class="small muted">规划时会按所选模型的写法写提示词：Qwen 用自然语言，Pony / Anima 用标签。</p>
+      </div>
+      {{ rating_field('qwen', follow_model=True) }}
+      {{ lora_panel(lora_catalog, chips=False) }}
+      <label class="check-row"><input type="checkbox" name="review" value="true"> 先看计划再生成（规划完先停下，确认或修改后再花 GPU 生成）</label>
       <div class="submit-row">
         <span class="small muted">自动规划 1–8 张图片<br>也可以在描述里指定张数</span>
         <button type="submit" id="directorSubmit">开始创作 {{ icon('arrow') }}</button>
@@ -32,4 +60,22 @@
     <div class="guide-step"><span>03</span><div><h3>保留每一次灵感</h3><p>下载图片和完整参数，收藏喜欢的作品，或接着微调。</p></div></div>
   </aside>
 </div>
+<script src="/static/lora.js?v=20260924d" defer></script>
+<script>
+(() => {
+  const form = document.getElementById('directorForm');
+  const options = document.getElementById('mangaOptions');
+  const count = document.getElementById('count');
+  const brief = document.getElementById('brief');
+  const placeholder = brief.placeholder;
+  const sync = () => {
+    const manga = form.elements.preset.value === 'manga';
+    options.hidden = !manga;
+    count.disabled = !manga;
+    brief.placeholder = manga ? '下班后被困在电梯里的两个同事。一个是冷淡的女上司，一个是刚入职的男下属，停电的二十分钟里关系一点点失控。黑白网点、少年漫画式的分镜。' : placeholder;
+  };
+  form.querySelectorAll('input[name=preset]').forEach(input => input.addEventListener('change', sync));
+  sync();
+})();
+</script>
 {% endblock %}

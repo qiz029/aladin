@@ -1,0 +1,19 @@
+{#- LoRA 面板（生图页与一句话出图共用）：选择序列化进隐藏字段 loras，交互在 static/lora.js。
+    chips=False 时不显示「可选词」标签（一句话出图的提示词由 planner 写，没有可插入的输入框）。 -#}
+{% macro lora_panel(catalog, selected=None, chips=True) -%}
+<div class="field lora-field" id="loraPanel" hidden{% if not chips %} data-chips="off"{% endif %}>
+  <div class="lora-head">
+    <label>LoRA <span class="small muted" id="loraSummary"></span></label>
+    <span class="spacer"></span>
+    <select id="loraPreset" aria-label="应用预设"><option value="">应用预设…</option></select>
+    <button type="button" class="ghost sm" id="loraSavePreset">存为预设</button>
+    <button type="button" class="ghost sm" id="loraDeletePreset" hidden>删除预设</button>
+    <button type="button" class="ghost sm" id="loraClear">清空</button>
+  </div>
+  <div id="loraList"></div>
+  <p class="small lora-warnings" id="loraWarnings" role="status"></p>
+  <input type="hidden" name="loras" id="lorasInput" value="">
+  <script type="application/json" id="loraCatalog">{{ catalog|tojson }}</script>
+  <script type="application/json" id="loraSelected">{{ (selected or [])|tojson }}</script>
+</div>
+{%- endmacro %}

@@ -98,13 +98,23 @@ def validate_request(request: dict) -> dict:
         raise ValueError('brief 不能为空')
     if len(brief) > contract.MAX_BRIEF_CHARS:
         raise ValueError(f'brief 太长（上限 {contract.MAX_BRIEF_CHARS} 字符）')
+    preset = request.get('preset')
+    if preset is not None and preset not in contract.PRESETS:
+        raise ValueError('未知的预设')
     count = request.get('count')
     if count is not None and (type(count) is not int or not contract.MIN_IMAGES <= count <= contract.MAX_IMAGES):
         raise ValueError(f'count 需在 {contract.MIN_IMAGES}–{contract.MAX_IMAGES} 之间')
+    if preset == 'manga' and count not in contract.MANGA_LAYOUTS:
+        raise ValueError(f'漫画格数需在 {contract.MANGA_MIN}–{contract.MANGA_MAX} 之间')
+    rating = request.get('rating')
+    if rating is not None and rating not in contract.RATING_ORDER:
+        raise ValueError('未知的尺度')
     key = request.get('key')
     if key is not None and (not isinstance(key, str) or not re.fullmatch(r'[a-f0-9]{64}', key)):
         raise ValueError('无效的结果 key')
-    return {'brief': brief.strip(), 'count': count}
+    # 目标模型规格（尺寸、边界、默认值、LoRA 说明）由宿主给出；老请求没有它，按 Qwen 处理
+    target = contract.validate_target(request.get('target'))
+    return {'brief': brief.strip(), 'count': count, 'target': target, 'preset': preset, 'rating': rating}
 
 
 def _tail(lines: int = 8) -> str:
@@ -163,7 +173,10 @@ def complete(messages: list[dict], schema: dict) -> str:
         'top_p': 0.9,
         'max_tokens': MAX_OUTPUT_TOKENS,
         'chat_template_kwargs': {'enable_thinking': False},
-        'response_format': {'type': 'json_schema', 'schema': schema},
+        # llama.cpp（v0.4.1 tools/server/server-common.cpp）对 type=json_schema 只读
+        # response_format.json_schema.schema；schema 直接放在 response_format 下会被**静默忽略**，
+        # 约束解码不生效——之前每次规划都要靠「无法解析 → 重试」多跑一轮就是这个原因。
+        'response_format': {'type': 'json_schema', 'json_schema': {'name': 'plan', 'schema': schema}},
     }).encode()
     request = urllib.request.Request(SERVER + '/v1/chat/completions', data=body,
                                      headers={'Content-Type': 'application/json'})
@@ -198,7 +211,7 @@ def plan(request: dict) -> dict:
     from aladin import planner_schema as contract
 
     cleaned = validate_request(dict(request))
-    brief, count = cleaned['brief'], cleaned['count']
+    brief, count, target = cleaned['brief'], cleaned['count'], cleaned['target']
     receipt = Path('/results') / request['key'] / 'plan.json' if request.get('key') else None
     if receipt is not None and receipt.is_file():
         saved = json.loads(receipt.read_text())
@@ -206,9 +219,22 @@ def plan(request: dict) -> dict:
             return saved['plan']
     started = time.time()
     model = ensure_model()
-    schema = contract.plan_schema(count)
-    messages = [{'role': 'system', 'content': contract.SYSTEM_PROMPT},
-                {'role': 'user', 'content': contract.user_prompt(brief, count)}]
+    manga = cleaned['preset'] == 'manga'
+    if manga:
+        rating = cleaned['rating']
+        schema = contract.manga_schema(count, target, rating)
+        messages = [{'role': 'system', 'content': contract.manga_system_prompt(target, count, rating)},
+                    {'role': 'user', 'content': contract.manga_user_prompt(brief, count)}]
+    else:
+        schema = contract.plan_schema(count, target)
+        messages = [{'role': 'system', 'content': contract.system_prompt(target)},
+                    {'role': 'user', 'content': contract.user_prompt(brief, count)}]
+
+    def harness(parsed: dict) -> tuple[list[dict], dict, list[str]]:
+        if manga:
+            return contract.validate_manga(parsed, count, target, cleaned['rating'])
+        variants, notes = contract.validate_plan(parsed, count, target)
+        return variants, {}, notes
     process = start_server(model)
     try:
         notes: list[str] = []
@@ -216,7 +242,7 @@ def plan(request: dict) -> dict:
         try:
             raw = complete(messages, schema)
             parsed, raw = _parse(raw)
-            variants, notes = contract.validate_plan(parsed, count)
+            variants, story, notes = harness(parsed)
         except (ValueError, json.JSONDecodeError) as first_error:
             # 只重试一次，并把失败原因回灌给模型（约束解码下极少走到这里）
             retry_messages = list(messages)
@@ -226,11 +252,14 @@ def plan(request: dict) -> dict:
                 'role': 'user',
                 'content': '上面的输出无法解析（' + str(first_error)[:120]
                            + '）。请只输出符合 schema 的 JSON。'})
+            first_raw = raw
             raw = complete(retry_messages, schema)
             parsed, raw = _parse(raw)
-            variants, notes = contract.validate_plan(parsed, count)
-            notes = ['首次输出无法解析，已重试一次'] + notes
-        result = {'variants': variants, 'notes': notes, 'raw': raw,
+            variants, story, notes = harness(parsed)
+            # 记下第一次为什么失败：否则只知道「重试过」，查不出每次都要多跑一轮的原因
+            notes = [f'首次输出无法解析，已重试一次（{type(first_error).__name__}: {str(first_error)[:160]}；'
+                     f'输出 {len(first_raw)} 字符，结尾：{first_raw[-120:]!r}）'] + notes
+        result = {**story, 'variants': variants, 'notes': notes, 'raw': raw,
                 'model': MODEL_REPO, 'modelRevision': MODEL_REVISION, 'quantization': GGUF,
                 'plannerRevision': revision(),
                 'elapsedSeconds': round(time.time() - started, 2)}

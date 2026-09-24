@@ -30,7 +30,8 @@ UPDATABLE = frozenset({
 })
 
 FINISHED_STATES = ('succeeded', 'failed')
-ACTIVE_STATES = ('pending', 'submitting', 'submitted', 'running', 'unknown')
+# review：一句话出图规划完、等人确认。没有在跑的 Modal 调用，worker 不认领它
+ACTIVE_STATES = ('pending', 'submitting', 'submitted', 'running', 'unknown', 'review')
 
 
 def connect() -> psycopg.Connection:
@@ -457,13 +458,26 @@ def data_path(rel_path: str) -> Path:
     return settings.DATA / rel_path
 
 
-def accept_plan(row: dict, request: dict, params: dict) -> bool:
-    """计划与下一阶段请求一次提交；重复轮询不会重复安排图片任务。"""
+def accept_plan(row: dict, request: dict, params: dict, state: str = 'pending') -> bool:
+    """计划与下一阶段请求一次提交；重复轮询不会重复安排图片任务。state 为 pending 或 review。"""
+    if state not in ('pending', 'review'):
+        raise ValueError('计划只能进入 pending 或 review')
+    with connect() as connection:
+        cursor = connection.execute(
+            "UPDATE jobs SET request=%s, params=%s, image_count=%s, state=%s,"
+            " call_id=NULL, attempts=0, next_poll_at=NULL, lease_owner=NULL,"
+            " lease_expires_at=NULL, last_error=NULL"
+            " WHERE id=%s AND request=%s::jsonb AND state IN ('submitted','running','unknown')",
+            (dumps(request), dumps(params), params['images'], state, row['id'], dumps(row['request'])))
+        return cursor.rowcount > 0
+
+
+def approve_plan(job_id: str, request: dict, params: dict) -> bool:
+    """review → pending。只认 review 状态，重复点确认或并发确认只有一次生效。"""
     with connect() as connection:
         cursor = connection.execute(
             "UPDATE jobs SET request=%s, params=%s, image_count=%s, state='pending',"
             " call_id=NULL, attempts=0, next_poll_at=NULL, lease_owner=NULL,"
-            " lease_expires_at=NULL, last_error=NULL"
-            " WHERE id=%s AND request=%s::jsonb AND state IN ('submitted','running','unknown')",
-            (dumps(request), dumps(params), params['images'], row['id'], dumps(row['request'])))
+            " lease_expires_at=NULL, last_error=NULL WHERE id=%s AND state='review'",
+            (dumps(request), dumps(params), params['images'], job_id))
         return cursor.rowcount > 0

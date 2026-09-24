@@ -24,3 +24,23 @@ def build(prompt, images, params):
         request['loras'] = loras
     request['key'] = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return request
+
+
+def build_variants(key, model, variants, sampler, scheduler):
+    """一句话出图的批量：每张图自带提示词、尺寸、步数、CFG、种子和 LoRA（与 Qwen 的 build_variants 同形）。
+
+    LoRA 逐张给：现在同一批共用一套，以后由 planner 逐张挑时容器与记录格式都不用改。
+    结果目录用调用方给的 key（一句话出图任务的 result_key），不按内容另算。
+    """
+    if model == DEFAULT_MODEL or model not in MODELS:
+        raise ValueError('Unsupported extra image model')
+    spec = MODELS[model]
+    return dict(mode='txt2img', modelId=model, model=spec['repo'], modelRevision=spec['revision'],
+        workerRevision=revision(), comfyRevision=COMFY_REVISION, key=key, sampler=sampler,
+        scheduler=scheduler,
+        variants=[dict(prompt=item['prompt'].strip(), negative=item.get('negative') or '',
+                       size=item['size'], width=item['width'], height=item['height'],
+                       steps=item['steps'], cfg=item['cfg'], seed=item['seed'],
+                       loras=[{'file': l['file'], 'sha256': l['sha256'], 'strength': l['strength']}
+                              for l in item.get('loras') or []])
+                  for item in variants])

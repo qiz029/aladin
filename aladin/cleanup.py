@@ -26,7 +26,8 @@ def delete_job(job_id: str) -> bool:
         row = connection.execute(
             'DELETE FROM jobs WHERE id = %s AND state = ANY(%s)'
             ' RETURNING id, input_path, app, mode, result_key',
-            (job_id, list(db.FINISHED_STATES))).fetchone()
+            # review（等确认）也能删：此时没有在跑的 Modal 调用
+            (job_id, list(db.FINISHED_STATES) + ['review'])).fetchone()
         if row is None:
             exists = connection.execute(
                 'SELECT 1 FROM jobs WHERE id = %s', (job_id,)).fetchone()

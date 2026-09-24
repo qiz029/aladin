@@ -13,6 +13,152 @@
   <p class="err small mt-2" id="error" {% if not job.error or job.state != 'failed' %}style="display:none"{% endif %}>{{ job.error or '' }}</p>
   <details><summary>查看运行记录</summary><pre class="log" id="log"></pre></details>
 </div>
+{% macro manga_story(plan) %}
+<div class="manga-story">
+  <h3>{{ plan.story.title or '（无标题）' }}</h3>
+  <p>{{ plan.story.logline }}</p>
+  {% if plan.story.setting %}<p class="small muted">场景：{{ plan.story.setting }}</p>{% endif %}
+  {% for c in plan.characters %}<p class="small"><strong>{{ c.name }}</strong> · <span class="muted">{{ c.appearance }}</span></p>{% endfor %}
+</div>
+<div class="manga-page" aria-label="版式预览：从右上开始右→左阅读">
+  {% for v in plan.variants %}{% set r = v.panel.rect %}
+  <div class="manga-slot rating-{{ v.panel.rating }}" style="left:{{ r[0]*100 }}%;top:{{ r[1]*100 }}%;width:{{ r[2]*100 }}%;height:{{ r[3]*100 }}%">
+    <span>{{ v.panel.index }}</span><small>{{ beats[v.panel.beat] }} · {{ shots[v.panel.shot] }}</small></div>
+  {% endfor %}
+</div>
+{% endmacro %}
+{% set manga = job.params.plan and job.params.plan.preset == 'manga' %}
+{% if job.mode == 'director' and job.state == 'review' and manga %}
+<div class="panel review-panel" id="reviewPanel">
+  <h2>确认分镜</h2>
+  <p class="small muted">格数和版式已定（尺寸由格子决定）。可以改每格的尺度、情节、旁白、对白和提示词。提示词写原文即可：
+    尺度标签与 LoRA 触发词会按每格的尺度自动补上。确认后才开始花 GPU 生成。</p>
+  {% for note in job.params.plan.notes %}<p class="small">{{ note }}</p>{% endfor %}
+  {% set target = review_target %}
+  <div class="manga-review-head">{{ manga_story(job.params.plan) }}</div>
+  {% for v in job.params.plan.variants %}
+  <div class="review-item manga-item">
+    <div class="review-head"><strong>第 {{ v.panel.index }} 格</strong>
+      <span class="small muted">{{ beats[v.panel.beat] }} · {{ shots[v.panel.shot] }} · {{ '大格' if v.panel.large else '小格' }}</span>
+      <span class="small muted grow">{{ v.rationale }}</span>
+      <select class="review-rating" aria-label="尺度">
+        {% for level in manga_ratings %}<option value="{{ level }}" {% if level == v.panel.rating %}selected{% endif %}>{{ ratings[level] }}</option>{% endfor %}
+      </select></div>
+    <label>情节</label>
+    <input type="text" class="review-action" maxlength="300" value="{{ v.panel.action }}">
+    <div class="bar-row">
+      <div class="grow"><label>旁白</label><input type="text" class="review-caption" maxlength="80" value="{{ v.panel.caption }}"></div>
+    </div>
+    <label>对白（每行一句，「说话人：台词」，最多 2 句）</label>
+    <textarea class="review-dialogue" rows="2">{% for line in v.panel.dialogue %}{{ line.speaker }}：{{ line.text }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+    <label>提示词</label>
+    <textarea class="review-prompt" rows="4" maxlength="2000">{{ v.prompt_defaults.original if v.prompt_defaults else v.prompt }}</textarea>
+    <label>负向词</label>
+    <textarea class="review-negative" rows="2" maxlength="2000">{{ v.negative }}</textarea>
+    <div class="bar-row">
+      <div class="w-xs"><label>步数</label><input type="number" class="review-steps" value="{{ v.steps }}" min="{{ target.steps[0] }}" max="{{ target.steps[1] }}"></div>
+      <div class="w-xs"><label>CFG</label><input type="number" class="review-cfg" value="{{ v.cfg }}" step="0.1" min="{{ target.cfg[0] }}" max="{{ target.cfg[1] }}"></div>
+      <div class="w-md"><label>种子</label><input type="number" class="review-seed" value="{{ v.seed }}" min="0"></div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="submit-row"><p class="form-error" id="reviewError" role="alert" hidden></p>
+    <button type="button" id="approvePlan">确认并开始生成 {{ icon('arrow') }}</button></div>
+</div>
+<script>
+document.getElementById('approvePlan').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const error = document.getElementById('reviewError');
+  const dialogue = text => text.split('\n').map(line => line.trim()).filter(Boolean).slice(0, 2).map(line => {
+    const at = line.search(/[:：]/);
+    return at < 0 ? {speaker: '', text: line} : {speaker: line.slice(0, at).trim(), text: line.slice(at + 1).trim()};
+  });
+  const variants = [...document.querySelectorAll('.manga-item')].map(item => ({
+    rating: item.querySelector('.review-rating').value,
+    action: item.querySelector('.review-action').value,
+    caption: item.querySelector('.review-caption').value,
+    dialogue: dialogue(item.querySelector('.review-dialogue').value),
+    prompt: item.querySelector('.review-prompt').value,
+    negative: item.querySelector('.review-negative').value,
+    steps: Number(item.querySelector('.review-steps').value),
+    cfg: Number(item.querySelector('.review-cfg').value),
+    seed: Number(item.querySelector('.review-seed').value),
+  }));
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    const response = await fetch({{ ('/api/v1/jobs/' + job.id + '/approve')|tojson }}, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({variants})});
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(Array.isArray(data?.detail) ? data.detail.map(d => d.msg || d).join('；') : (data?.detail || response.status));
+    location.reload();
+  } catch (e) {
+    error.textContent = '确认失败：' + e.message; error.hidden = false; button.disabled = false;
+  }
+});
+</script>
+{% elif job.mode == 'director' and job.state == 'review' %}
+<div class="panel review-panel" id="reviewPanel">
+  <h2>确认计划</h2>
+  <p class="small muted">可以改提示词、负向词、尺寸、步数、CFG、种子，也可以去掉某张。提示词写原文即可：
+    尺度标签与 LoRA 触发词会在生成时自动补上。确认后才开始花 GPU 生成。</p>
+  {% for note in job.params.plan.notes %}<p class="small">{{ note }}</p>{% endfor %}
+  {% set target = review_target %}
+  {% for v in job.params.plan.variants %}
+  <div class="review-item">
+    <div class="review-head"><strong>第 {{ loop.index }} 张</strong>
+      <span class="small muted grow">{{ v.rationale }}</span>
+      <label class="small"><input type="checkbox" class="review-drop"> 不要这张</label></div>
+    <label>提示词</label>
+    <textarea class="review-prompt" rows="4" maxlength="2000">{{ v.prompt_defaults.original if v.prompt_defaults else v.prompt }}</textarea>
+    <label>负向词</label>
+    <textarea class="review-negative" rows="2" maxlength="2000">{{ v.negative }}</textarea>
+    <div class="bar-row">
+      <div class="w-md"><label>尺寸</label><select class="review-size">
+        {% for key, size in target.sizes.items() %}<option value="{{ key }}" {% if key == v.size %}selected{% endif %}>{{ size.label }} {{ size.width }}×{{ size.height }}</option>{% endfor %}
+      </select></div>
+      <div class="w-xs"><label>步数</label><input type="number" class="review-steps" value="{{ v.steps }}" min="{{ target.steps[0] }}" max="{{ target.steps[1] }}"></div>
+      <div class="w-xs"><label>CFG</label><input type="number" class="review-cfg" value="{{ v.cfg }}" step="0.1" min="{{ target.cfg[0] }}" max="{{ target.cfg[1] }}"></div>
+      <div class="w-md"><label>种子</label><input type="number" class="review-seed" value="{{ v.seed }}" min="0"></div>
+    </div>
+    <input type="hidden" class="review-rationale" value="{{ v.rationale }}">
+  </div>
+  {% endfor %}
+  <div class="submit-row"><p class="form-error" id="reviewError" role="alert" hidden></p>
+    <button type="button" id="approvePlan">确认并开始生成 {{ icon('arrow') }}</button></div>
+</div>
+<script>
+document.getElementById('approvePlan').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const error = document.getElementById('reviewError');
+  const variants = [...document.querySelectorAll('.review-item')]
+    .filter(item => !item.querySelector('.review-drop').checked)
+    .map(item => ({
+      prompt: item.querySelector('.review-prompt').value,
+      negative: item.querySelector('.review-negative').value,
+      size: item.querySelector('.review-size').value,
+      steps: Number(item.querySelector('.review-steps').value),
+      cfg: Number(item.querySelector('.review-cfg').value),
+      seed: Number(item.querySelector('.review-seed').value),
+      rationale: item.querySelector('.review-rationale').value,
+    }));
+  error.hidden = true;
+  if (!variants.length) { error.textContent = '至少保留一张图。'; error.hidden = false; return; }
+  button.disabled = true;
+  try {
+    const response = await fetch({{ ('/api/v1/jobs/' + job.id + '/approve')|tojson }}, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({variants})});
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(Array.isArray(data?.detail) ? data.detail.map(d => d.msg || d).join('；') : (data?.detail || response.status));
+    location.reload();
+  } catch (e) {
+    error.textContent = '确认失败：' + e.message; error.hidden = false; button.disabled = false;
+  }
+});
+</script>
+{% endif %}
+
 <div data-live="artifacts">
 <div class="section-head"><h2>生成作品 <span class="count">{{ job.artifacts|length }}</span></h2>{% if job.artifacts %}<a href="/jobs/{{ job.id }}/download">打包下载全部 ↓</a>{% endif %}</div>
 {% if job.artifacts and job.kind == 'video' %}
@@ -87,7 +233,7 @@
     <div class="grow">
       <div class="small muted" data-live="summary">
         {%- if job.mode == 'director' %}
-        一句话出图 · {{ ('已完成' if job.state == 'succeeded' else ('生成失败' if job.state == 'failed' else '生成中')) if job.params.plan else '规划中' }} · {{ (job.params.images|string + ' 张') if job.params.images else '张数自动决定' }}
+        一句话出图 · {{ job.model_label }} · {{ ('等待确认' if job.state == 'review' else ('已完成' if job.state == 'succeeded' else ('生成失败' if job.state == 'failed' else '生成中'))) if job.params.plan else '规划中' }} · {{ (job.params.images|string + ' 张') if job.params.images else '张数自动决定' }}
         {%- elif job.kind == 'video' %}
         {{ job.mode_label }} · {{ job.params.frames }} 帧 @ {{ job.params.fps }}fps（约 {{ job.params.seconds }} 秒）·
         {{ job.params.width }}×{{ job.params.height }} ·
@@ -135,11 +281,16 @@
 <div class="panel" id="planPanel">
   <h2>生成计划</h2>
   <p class="small muted">需求、每张图的提示词、参数与模型版本会随打包下载一起保存。</p>
-  {% if job.params.plan %}
+  {% if job.state == 'review' %}<p class="small muted">计划见上方「确认计划」。</p>
+  {% elif job.params.plan %}
   {% for note in job.params.plan.notes %}<p class="small">{{ note }}</p>{% endfor %}
+  {% if manga %}<div class="manga-review-head">{{ manga_story(job.params.plan) }}</div>{% endif %}
   {% for variant in job.params.plan.variants %}
   <details>
-    <summary>第 {{ loop.index }} 张 · {{ variant.width }}×{{ variant.height }} · {{ variant.steps }} 步 · CFG {{ variant.cfg }}</summary>
+    <summary>第 {{ loop.index }} {{ '格' if manga else '张' }}{% if manga %} · {{ beats[variant.panel.beat] }} · {{ shots[variant.panel.shot] }} · {{ ratings[variant.panel.rating] }}{% endif %} · {{ variant.width }}×{{ variant.height }} · {{ variant.steps }} 步 · CFG {{ variant.cfg }}</summary>
+    {% if manga %}<p>{{ variant.panel.action }}</p>
+    {% if variant.panel.caption %}<p class="small">旁白：{{ variant.panel.caption }}</p>{% endif %}
+    {% for line in variant.panel.dialogue %}<p class="small">{{ line.speaker or '？' }}：「{{ line.text }}」</p>{% endfor %}{% endif %}
     <p>{{ variant.rationale }}</p><pre style="white-space:pre-wrap">{{ variant.prompt }}</pre>
     <p class="small muted">负向：{{ variant.negative or '无' }} · seed {{ variant.seed }}</p>
   </details>
@@ -180,6 +331,7 @@ const isVideo = {{ (job.kind == 'video')|tojson }};
 // 页面渲染时任务是否已结束：避免「已完成 -> 收到 end -> reload -> 又已完成」的死循环
 const alreadyFinished = {{ job.finished|tojson }};
 const createdAt = new Date({{ job.created_iso|tojson }});
+const awaitingReview = {{ (job.state == 'review')|tojson }};
 const headline = document.getElementById('headline');
 const baseTitle = document.title;
 // 标签页标题带上进度：切到别的标签页也能看到跑到哪了
@@ -254,9 +406,14 @@ function tickElapsed() {
   elapsedEl.textContent = ` · 已用时 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 let timer = null;
-if (!alreadyFinished) { tickElapsed(); timer = setInterval(tickElapsed, 1000); }
+if (awaitingReview) {
+  // 规划完、等人确认：不在跑，也不计时
+  barBox.classList.remove('busy');
+  progressText.textContent = '计划已就绪，等你确认';
+  headline.textContent = '看看这份计划';
+} else if (!alreadyFinished) { tickElapsed(); timer = setInterval(tickElapsed, 1000); }
 
-if (!alreadyFinished) appendLog('准备开始，首次启动可能需要几分钟…');
+if (!alreadyFinished && !awaitingReview) appendLog('准备开始，首次启动可能需要几分钟…');
 const source = new EventSource(`/jobs/${jobId}/stream`);
 source.onmessage = (event) => {
   const data = JSON.parse(event.data);
@@ -285,6 +442,8 @@ source.onmessage = (event) => {
     return;
   }
   if (data.kind === 'planned' && planning) { headline.textContent = '正在把想法变成画面'; source.close(); location.reload(); return; }
+  // 在别处（API / 另一个标签页）确认了计划：刷新成生成进度
+  if (data.kind === 'approved' && awaitingReview) { source.close(); location.reload(); return; }
   if (data.kind === 'progress') {
     // progress 事件里带的是 JSON 字符串（含 step/image/total/max）；逐步采样不进日志，太吵
     try {

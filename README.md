@@ -15,6 +15,15 @@ Agent：`POST /api/v1/director`，JSON `{"brief":"海边咖啡馆的两张宣传
 `GET /api/v1/jobs/{id}` 包含 `stage`、`plan`、`generation_request` 和逐产物 `prompt/params`。
 规划和生图分阶段持久化；已知 call_id 只接管，规划回执可在进程重启后恢复。
 
+页面上可以**选目标模型**（Qwen / Pony / Anima）和**整批共用的 LoRA**：planner 按目标模型的写法写提示词
+（Qwen 自然语言；Pony `score_9…` 标签并写负向词；Anima Danbooru 标签），尺寸与步数/CFG 落在该模型的范围内，
+LoRA 的说明会告诉 planner 以便配合，触发词自动补。勾选「先看计划再生成」时，规划完停在「等待确认」：
+可以逐张改提示词、尺寸、步数、CFG、种子或删掉几张，确认后才生成（API：`POST /api/v1/jobs/{id}/approve`）。
+
+「创作方式」选**日式漫画（一页多格）**（API `preset: "manga"`）时，planner 先写故事梗概与人物固定外貌，
+再按一页 4–8 格的版式（右上起、右→左阅读）逐格分镜：每格有节拍、镜头、情节、旁白与对白，
+尺度逐格递进且不超过所选上限，尺寸由格子形状决定。对白与旁白目前只保存在计划里；拼页和对白框排版尚未实现。
+
 ## 状态
 
 已端到端跑通四条链路：文生图（Qwen-Image 2.1 / Anima / Pony Realism）、改图（图生图、指令编辑、

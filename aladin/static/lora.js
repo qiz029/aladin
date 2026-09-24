@@ -14,7 +14,9 @@
   const deletePreset = document.getElementById('loraDeletePreset');
   const prompt = document.getElementById('prompt');
   const byId = Object.fromEntries(catalog.loras.map(item => [item.id, item]));
-  const models = JSON.parse(document.getElementById('image-models').textContent);
+  const modelsNode = document.getElementById('image-models');
+  const models = modelsNode ? JSON.parse(modelsNode.textContent) : {};
+  const chipsEnabled = panel.dataset.chips !== 'off' && Boolean(prompt);
   const familyOf = model => Object.entries(catalog.families).find(([, models]) => models.includes(model))?.[0];
   const STORE = 'aladin.loraPresets';
   let family = null;
@@ -99,7 +101,7 @@
       }
       render();
     });
-    const chips = item.suggest.length ? el('div', {class: 'lora-chips'}, ...item.suggest.map(word =>
+    const chips = chipsEnabled && item.suggest.length ? el('div', {class: 'lora-chips'}, ...item.suggest.map(word =>
       el('button', {type: 'button', className: 'chip-word', textContent: '+ ' + word, title: '加到提示词末尾',
                     onclick: () => {
                       const text = prompt.value.trim();

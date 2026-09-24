@@ -100,9 +100,9 @@ class ParamsAndRequestTest(unittest.TestCase):
             first, last = '200', str(200 + len(lora_ids) - 1)
             self.assertEqual(graph[first]['inputs']['model'], ['1', 0])
             self.assertEqual(graph[first]['inputs']['clip'], ['2', 0])
-            self.assertEqual(graph['11']['inputs']['model'], [last, 0], '采样用最后一个 LoRA 的模型')
-            self.assertEqual(graph['4']['inputs']['clip'], [last, 1], '文本编码用最后一个 LoRA 的 clip')
-            self.assertEqual(graph['10']['inputs']['clip'], [last, 1])
+            self.assertEqual(graph['13']['inputs']['model'], [last, 0], '采样用最后一个 LoRA 的模型')
+            self.assertEqual(graph['10']['inputs']['clip'], [last, 1], '正向编码用最后一个 LoRA 的 clip')
+            self.assertEqual(graph['11']['inputs']['clip'], [last, 1], '负向编码同样')
 
     def test_container_rejects_tampered_entries(self):
         built, _ = params(chosen=[{'id': 'real-skin-slider'}])

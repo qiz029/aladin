@@ -39,6 +39,13 @@ BASE = (os.environ.get('ALADIN_URL') or _dotenv('ALADIN_URL')
 TERMINAL = ('succeeded', 'failed')
 
 
+def lora_choices(specs: list[str]) -> list[dict]:
+    """--lora id 或 id:强度 → API 的 loras 字段。"""
+    return [dict(id=spec.split(':', 1)[0],
+                 **({'strength': float(spec.split(':', 1)[1])} if ':' in spec else {}))
+            for spec in specs]
+
+
 def call(method: str, path: str, body: dict | None = None, timeout: int = 60,
          form: bool = False):
     """返回 (状态码, 解析后的 body)。HTTP 错误不抛异常，交给调用方判断。
@@ -170,7 +177,19 @@ def main() -> int:
     director.add_argument('--count', type=int, default=None)
     director.add_argument('--rating', choices=('general', 'suggestive', 'explicit'),
                         help='尺度：日常 / 暗示 / 露骨；省略用服务端默认')
+    director.add_argument('--model', default=None,
+                          choices=('qwen-image-2.1', 'anima-base-1.0', 'pony-realism-2.2'),
+                          help='目标模型；planner 按它的写法写提示词')
+    director.add_argument('--lora', action='append', default=[], metavar='ID[:STRENGTH]',
+                          help='整批共用的 LoRA（仅 Pony / Anima），可重复')
+    director.add_argument('--review', action='store_true',
+                          help='规划完先停下，用 approve 命令确认后才生成')
+    director.add_argument('--preset', choices=('manga',), default=None,
+                          help='manga：日式漫画一页多格（--count 为格数 4–8，默认 6）')
     director.add_argument('--wait', action='store_true')
+
+    approve = sub.add_parser('approve', help='确认等待中的一句话出图计划（原样确认）')
+    approve.add_argument('job_id')
     director.add_argument('--out', default='aladin-out')
 
     edit = sub.add_parser('edit', help='改图（图生图 / 指令编辑）')
@@ -267,6 +286,13 @@ def main() -> int:
                   f"{(job.get('prompt') or '')[:60]}")
         return 0
 
+    if args.command == 'approve':
+        status, body = call('POST', f'/api/v1/jobs/{args.job_id}/approve', {})
+        if status != 200:
+            return fail(status, body)
+        print(f"approved {body['id']}  {body['params']['images']} 张，开始生成")
+        return 0
+
     if args.command == 'delete':
         status, body = call('DELETE', f'/api/v1/jobs/{args.job_id}')
         if status != 200:
@@ -315,10 +341,20 @@ def main() -> int:
         return show(body, Path(args.out) if args.out else None)
 
     if args.command == 'director':
-        payload = {'brief': args.brief, 'count': args.count, 'rating': args.rating}
+        payload = {'brief': args.brief, 'count': args.count, 'rating': args.rating,
+                   'review': args.review, 'loras': lora_choices(args.lora)}
+        if args.model:
+            payload['model'] = args.model
+        if args.preset:
+            payload['preset'] = args.preset
         status, body = call('POST', '/api/v1/director', payload, timeout=120)
         if status not in (200, 202):
             return fail(status, body)
+        if args.review:
+            # review 不是终态：规划完会停下等确认，--wait 在这里等不到结果
+            print(f"job {body['id']}\nstate {body['state']}\n规划完成后在任务页确认，"
+                  f"或运行：aladin.py approve {body['id']}")
+            return 0
         if args.wait:
             body = wait(body['id'], every=8)
         return show(body, out_dir if args.wait else None)
@@ -349,10 +385,7 @@ def main() -> int:
                    'model': args.model, 'cfg': args.cfg, 'sampler': args.sampler,
                    'scheduler': args.scheduler, 'rating': args.rating}
         if args.lora:
-            payload['loras'] = [
-                dict(id=spec.split(':', 1)[0],
-                     **({'strength': float(spec.split(':', 1)[1])} if ':' in spec else {}))
-                for spec in args.lora]
+            payload['loras'] = lora_choices(args.lora)
         payload = {k: v for k, v in payload.items() if v is not None}
     else:
         data = Path(args.image).read_bytes()

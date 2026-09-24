@@ -35,9 +35,11 @@ class ModelContractTest(unittest.TestCase):
             payload = build('a ceramic teapot', 2, params)
             self.assertEqual(validate(payload), payload)
             graph = workflow(payload)
-            self.assertEqual(graph['11']['inputs']['seed'], 42)
-            self.assertEqual(graph['15']['inputs']['seed'], 43)
+            # 每张图 6 个节点：正向、负向、latent、采样、解码、保存
+            self.assertEqual(graph['13']['inputs']['seed'], 42)
+            self.assertEqual(graph['19']['inputs']['seed'], 43)
             self.assertEqual(graph['10']['inputs']['text'], 'a ceramic teapot')
+            self.assertEqual(graph['15']['class_type'], 'SaveImage')
             self.assertEqual(graph['1']['class_type'], 'UNETLoader' if model.startswith('anima') else 'CheckpointLoaderSimple')
             if model.startswith('pony'):
                 self.assertEqual(graph['2']['inputs']['stop_at_clip_layer'], -2)

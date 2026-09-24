@@ -377,8 +377,18 @@ def job_page(request: Request, job_id: str):
     row = db.job(job_id)
     if row is None:
         raise HTTPException(status_code=404, detail='任务不存在')
+    view = _job_view(row)
+    review_target = None
+    if row.get('mode') == 'director' and row['state'] == 'review':
+        from .planner_schema import default_target
+        review_target = (view['params'].get('plan') or {}).get('request', {}).get('target') or default_target()
+    from .planner_schema import BEATS, SHOTS, allowed_ratings
+    from .prompt_defaults import RATINGS
+    planning = (view['params'].get('plan') or {}).get('request') or {}
     return TEMPLATES.TemplateResponse(request, 'job.html',
-                                      {'job': _job_view(row)})
+                                      {'job': view, 'review_target': review_target,
+                                       'beats': BEATS, 'shots': SHOTS, 'ratings': RATINGS,
+                                       'manga_ratings': allowed_ratings(planning.get('rating'))})
 
 
 @app.get('/jobs/{job_id}/state')
@@ -542,12 +552,25 @@ def gallery_delete(item_id: int):
 
 @app.get('/apps/director', response_class=HTMLResponse)
 def director_app(request: Request):
-    return TEMPLATES.TemplateResponse(request, 'director.html', {})
+    from .image_models import public_models
+    from .loras import public_catalog
+    from .planner_schema import MANGA_DEFAULT, MANGA_LAYOUTS, PRESETS
+    return TEMPLATES.TemplateResponse(request, 'director.html', {
+        'image_models': public_models(), 'lora_catalog': public_catalog(),
+        'presets': PRESETS, 'manga_counts': sorted(MANGA_LAYOUTS), 'manga_default': MANGA_DEFAULT})
 
 
 @app.post('/apps/director/jobs')
-def create_director_job(brief: str = Form(''), rating: str | None = Form(None)):
-    job_id, _ = api.submit_director(brief, rating=rating)
+def create_director_job(brief: str = Form(''), rating: str | None = Form(None),
+                        model: str = Form('qwen-image-2.1'), loras: str = Form(''),
+                        review: bool = Form(False), preset: str = Form(''),
+                        count: int | None = Form(None)):
+    try:
+        chosen = json.loads(loras) if loras.strip() else []
+    except ValueError:
+        raise HTTPException(status_code=400, detail='LoRA 选择格式不对') from None
+    job_id, _ = api.submit_director(brief, count=count, rating=rating, model=model, loras=chosen,
+                                    review=review, preset=preset or None)
     return RedirectResponse(url=f'/jobs/{job_id}', status_code=303)
 
 

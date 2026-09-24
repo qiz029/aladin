@@ -1,6 +1,7 @@
 {% from 'icons.html' import icon %}
 {% from 'rating.html' import rating_field %}
-{% set states = {'pending':'等待开始', 'submitting':'准备中', 'submitted':'已排队', 'running':'生成中', 'succeeded':'已完成', 'failed':'未完成', 'unknown':'等待恢复'} %}
+{% from 'lora_panel.html' import lora_panel %}
+{% set states = {'pending':'等待开始', 'submitting':'准备中', 'submitted':'已排队', 'running':'生成中', 'succeeded':'已完成', 'failed':'未完成', 'unknown':'等待恢复', 'review':'等待确认'} %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
