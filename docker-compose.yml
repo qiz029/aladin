@@ -1,0 +1,75 @@
+# aladin：三个容器 + 一个共享的产物目录。
+#   postgres  状态存储（named volume，不进 ./data —— 生命周期与产物不同）
+#   worker    提交/轮询/拉产物；唯一持有 Modal 凭据、唯一能提交任务的进程
+#   api       页面 / SSE / 文件下载 / 加入图库；不持有 Modal 凭据
+#
+# 产物始终在 workstation 磁盘上（./data），删掉容器不会丢图。
+#
+# macOS 上 Docker Desktop 的文件共享会把 bind mount 的属主映射为宿主用户，
+# 所以默认 root 在 macOS 上没问题；Linux 上用 .env 里的 ALADIN_UID/ALADIN_GID 指定宿主身份。
+name: aladin
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aladin
+      POSTGRES_USER: aladin
+      # 仅回环发布，且只在 compose 网络内可达；这是本地开发默认值，不是对外凭据
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aladin-local}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # 仅供宿主跑测试/排查；被别的服务占用时用 POSTGRES_HOST_PORT 改
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aladin -d aladin"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "aladin", "worker"]
+    user: "${ALADIN_UID:-0}:${ALADIN_GID:-0}"   # Linux 上必须设为宿主 UID/GID，否则产物属主是 root
+    environment:
+      DATABASE_URL: postgresql://aladin:${POSTGRES_PASSWORD:-aladin-local}@postgres:5432/aladin
+      ALADIN_DATA: /data
+      # 表单/API 未指定尺度时的默认值：general / suggestive / explicit
+      ALADIN_DEFAULT_RATING: ${ALADIN_DEFAULT_RATING:-explicit}
+      MODAL_CONFIG_PATH: /etc/aladin/modal.toml
+      # 可选：本计费周期额度（美元）；不填则页面不显示余额估算
+      MODAL_CREDIT_GRANT: ${MODAL_CREDIT_GRANT:-}
+    volumes:
+      - ./data:/data
+      # 只读挂载凭据；不打进镜像、不写进环境变量
+      - ${HOME}/.modal.toml:/etc/aladin/modal.toml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: ["python", "-m", "aladin", "api", "--host", "0.0.0.0"]
+    user: "${ALADIN_UID:-0}:${ALADIN_GID:-0}"   # Linux 上必须设为宿主 UID/GID，否则产物属主是 root
+    environment:
+      DATABASE_URL: postgresql://aladin:${POSTGRES_PASSWORD:-aladin-local}@postgres:5432/aladin
+      ALADIN_DATA: /data
+      # 表单/API 未指定尺度时的默认值：general / suggestive / explicit
+      ALADIN_DEFAULT_RATING: ${ALADIN_DEFAULT_RATING:-explicit}
+      # Browser pages use Cloudflare Access; /api/v1 remains available within the tailnet.
+      # An explicitly empty value disables canonical redirects for local development.
+      ALADIN_PUBLIC_URL: ${ALADIN_PUBLIC_URL:-}
+    volumes:
+      - ./data:/data
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8765:8765"   # 设为该机 IP/Tailscale IP 才对外可达
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

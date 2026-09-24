@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}收藏 · aladin{% endblock %}
+{% block body %}
+<div class="page-head">
+  <span class="eyebrow">Worth keeping</span><h1>我的收藏</h1>
+  <p class="sub">把喜欢的画面留在这里。独立保存，清理任务历史也不会丢失。</p>
+</div>
+
+<form class="gallery-filters" method="get" action="/gallery" id="galleryFilters">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="搜索提示词…" aria-label="搜索提示词">
+  <select name="kind" aria-label="类型">
+    <option value="">全部类型</option>
+    <option value="image" {% if filters.kind == 'image' %}selected{% endif %}>图片</option>
+    <option value="video" {% if filters.kind == 'video' %}selected{% endif %}>视频</option>
+  </select>
+  <select name="model" aria-label="模型">
+    <option value="">全部模型</option>
+    {% for key, count in facets.models %}<option value="{{ key }}" {% if filters.model == key %}selected{% endif %}>{{ model_labels.get(key, key) }}（{{ count }}）</option>{% endfor %}
+  </select>
+  <select name="rating" aria-label="尺度">
+    <option value="">全部尺度</option>
+    {% for key, count in facets.ratings %}<option value="{{ key }}" {% if filters.rating == key %}selected{% endif %}>{{ ratings.get(key, key) }}（{{ count }}）</option>{% endfor %}
+  </select>
+  <select name="min_stars" aria-label="最低星级">
+    <option value="0">不限星级</option>
+    {% for n in range(1, 6) %}<option value="{{ n }}" {% if filters.min_stars == n %}selected{% endif %}>{{ '★' * n }} 及以上</option>{% endfor %}
+  </select>
+  <select name="sort" aria-label="排序">
+    <option value="newest" {% if filters.sort == 'newest' %}selected{% endif %}>最新收藏</option>
+    <option value="oldest" {% if filters.sort == 'oldest' %}selected{% endif %}>最早收藏</option>
+    <option value="stars" {% if filters.sort == 'stars' %}selected{% endif %}>星级优先</option>
+  </select>
+  {% if filters.tag %}<input type="hidden" name="tag" value="{{ filters.tag }}">{% endif %}
+  <button type="submit" class="sm">筛选</button>
+  <span class="spacer"></span>
+  <span class="small muted">{{ items|length }} / {{ total }} 件{% if filtered %} · <a href="/gallery">清除筛选</a>{% endif %}</span>
+</form>
+{% if facets.tags %}
+<div class="filters tag-filters" aria-label="按标签筛选">
+  {% for name, count in facets.tags %}
+  <a class="pill {% if filters.tag == name %}on{% endif %}" href="{{ request.url.remove_query_params('tag') if filters.tag == name else request.url.include_query_params(tag=name) }}">#{{ name }} {{ count }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if items %}
+<div class="cards">
+  {% for item in items %}
+  <div class="card">
+    <a href="/gallery/{{ item.id }}/file" target="_blank"
+       aria-label="预览收藏：{{ item.prompt }}" data-lightbox data-kind="{{ item.kind }}"
+       data-src="/gallery/{{ item.id }}/file"
+       data-title="{{ item.prompt }}"
+       data-download="/gallery/{{ item.id }}/download">
+      {% if item.kind == 'video' %}
+      <video src="/gallery/{{ item.id }}/file" preload="metadata" muted loop playsinline></video>
+      {% else %}
+      <img src="/gallery/{{ item.id }}/file" alt="{{ item.prompt }}" loading="lazy">
+      {% endif %}
+    </a>
+    <div class="body">
+      <div class="small truncate" title="{{ item.prompt }}">{{ item.prompt }}</div>
+      <div class="stars" data-id="{{ item.id }}" data-stars="{{ item.stars }}" role="group" aria-label="星级">
+        {% for n in range(1, 6) %}<button type="button" class="star {% if n <= item.stars %}on{% endif %}" data-value="{{ n }}" aria-label="{{ n }} 星" aria-pressed="{{ 'true' if n <= item.stars else 'false' }}">★</button>{% endfor %}
+      </div>
+      <div class="tag-list" data-id="{{ item.id }}" data-tags="{{ item.tags|tojson|forceescape }}">
+        {% for name in item.tags %}<span class="tag"><a href="/gallery?tag={{ name|urlencode }}">#{{ name }}</a><button type="button" class="tag-remove" data-tag="{{ name }}" aria-label="移除标签 {{ name }}">×</button></span>{% endfor %}
+        <input class="tag-input" placeholder="+ 标签" aria-label="添加标签，回车确认" maxlength="32">
+      </div>
+      <div class="small muted">
+        {{ item.model_label or ('视频' if item.kind == 'video' else '图片') }}{% if item.rating %} · {{ ratings.get(item.rating, item.rating) }}{% endif %} · seed {{ item.seed }} ·
+        {{ (item.bytes / 1048576)|round(1) }} MiB · {{ item.when }}
+      </div>
+      <div class="actions">
+        <a class="btn btn-ghost sm" href="/gallery/{{ item.id }}/download">下载</a>
+        <button class="ghost sm" onclick="removeItem({{ item.id }}, this)">移除</button>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% elif filtered %}
+<div class="empty">没有符合条件的收藏。<a href="/gallery">清除筛选</a></div>
+{% else %}
+<div class="empty">这里留给值得珍藏的作品。在任务页点击「加入收藏」，就能把喜欢的画面留下来。</div>
+{% endif %}
+
+<script>
+// 下拉框改了就直接筛选，不必再点按钮
+document.getElementById('galleryFilters').addEventListener('change', event => {
+  if (event.target.tagName === 'SELECT') event.currentTarget.requestSubmit();
+});
+
+async function patchItem(id, body) {
+  const response = await fetch('/api/v1/gallery/' + id, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(Array.isArray(data?.detail) ? data.detail.join('；') : response.status);
+  return data;
+}
+
+function renderStars(group, stars) {
+  group.dataset.stars = stars;
+  group.querySelectorAll('.star').forEach(star => {
+    const on = Number(star.dataset.value) <= stars;
+    star.classList.toggle('on', on);
+    star.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function renderTags(list, tags) {
+  list.dataset.tags = JSON.stringify(tags);
+  list.querySelectorAll('.tag').forEach(el => el.remove());
+  const input = list.querySelector('.tag-input');
+  for (const name of tags) {
+    const chip = document.createElement('span'); chip.className = 'tag';
+    const link = document.createElement('a'); link.href = '/gallery?tag=' + encodeURIComponent(name); link.textContent = '#' + name;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'tag-remove';
+    remove.dataset.tag = name; remove.textContent = '×'; remove.setAttribute('aria-label', '移除标签 ' + name);
+    chip.append(link, remove); list.insertBefore(chip, input);
+  }
+}
+
+document.addEventListener('click', async event => {
+  const star = event.target.closest('.stars .star');
+  const remove = event.target.closest('.tag-remove');
+  try {
+    if (star) {
+      const group = star.closest('.stars');
+      const value = Number(star.dataset.value);
+      // 再点一次当前星级 = 清除评分
+      const next = value === Number(group.dataset.stars) ? 0 : value;
+      renderStars(group, (await patchItem(group.dataset.id, {stars: next})).stars);
+    } else if (remove) {
+      const list = remove.closest('.tag-list');
+      const tags = JSON.parse(list.dataset.tags).filter(tag => tag !== remove.dataset.tag);
+      renderTags(list, (await patchItem(list.dataset.id, {tags})).tags);
+    }
+  } catch (error) {
+    alert('保存失败：' + error.message);
+  }
+});
+
+document.addEventListener('keydown', async event => {
+  const input = event.target.closest('.tag-input');
+  if (!input || (event.key !== 'Enter' && event.key !== ',')) return;
+  event.preventDefault();
+  const value = input.value.trim();
+  if (!value) return;
+  const list = input.closest('.tag-list');
+  try {
+    const saved = await patchItem(list.dataset.id, {tags: [...JSON.parse(list.dataset.tags), value]});
+    renderTags(list, saved.tags);
+    input.value = '';
+  } catch (error) {
+    alert('保存失败：' + error.message);
+  }
+});
+
+async function removeItem(id, button) {
+  if (!confirm('从收藏移除？（生成历史里的原件会保留）')) return;
+  try {
+    button.disabled = true;
+    const response = await fetch('/gallery/' + id, {method: 'DELETE'});
+    if (!response.ok) throw new Error(response.status);
+    location.reload();
+  } catch (error) {
+    button.disabled = false;
+    alert('移除失败：' + error.message);
+  }
+}
+</script>
+{% endblock %}

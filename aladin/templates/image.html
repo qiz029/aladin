@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}生成图片 · aladin{% endblock %}
+{% block body %}
+<div class="page-head"><span class="eyebrow">Text to image</span><h1>生成图片</h1><p class="sub">把画面写下来，让光线、色彩和细节慢慢成形。</p></div>
+
+<div class="creator-layout">
+<div class="panel creator-panel">
+  <form data-enhanced method="post" action="/apps/image/jobs">
+    <input type="hidden" name="negative_provided" value="true">
+    <div class="field">
+      <label for="model">模型</label>
+      <select id="model" name="model">
+        {% for key, model in image_models.items() %}
+        <option value="{{ key }}" {% if key == defaults.model %}selected{% endif %}>{{ model.label }}</option>
+        {% endfor %}
+      </select>
+      <p id="model-hint" class="small muted">{{ model_hint }}</p>
+    </div>
+    <div class="field">
+      <label for="peopleCase">人物测试场景（可选）</label>
+      <select id="peopleCase"><option value="">自定义画面</option></select>
+      <p class="small muted">选择测试场景会填入提示词、竖版尺寸、4 张候选及固定种子；会增加生成耗时与用量。</p>
+      <label for="prompt">提示词</label>
+      <textarea id="prompt" name="prompt" required maxlength="2000"
+                placeholder="描述你想要的画面，例如：a red ceramic teapot on a wooden table, soft daylight">{{ defaults.prompt or '' }}</textarea>
+    </div>
+    {{ rating_field(prompt_family(defaults.model), defaults.rating, follow_model=True) }}
+
+    <div class="bar-row mt-2">
+      <div class="w-sm">
+        <label for="images">生成几张</label>
+        <input type="number" id="images" name="images" value="1" min="1" max="{{ limits['images'][1] }}">
+      </div>
+      <div class="grow">
+        <label>尺寸</label>
+        <div class="chips">
+          {% for key, preset in sizes.items() %}
+          <label class="chip">
+            <input type="radio" name="size" value="{{ key }}" {% if key == defaults.size %}checked{% endif %}>
+            <span class="ratio ratio-{{ key }}" aria-hidden="true"></span><span>{{ preset.label }}</span><span class="hint">{{ preset.hint }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+
+
+    <details>
+      <summary>高级参数</summary>
+      <div class="bar-row">
+        <div class="w-xs">
+          <label for="steps">步数</label>
+          <input type="number" id="steps" name="steps" value="{{ defaults.steps }}"
+                 min="{{ limits['steps'][0] }}" max="{{ limits['steps'][1] }}">
+        </div>
+        <div class="w-xs">
+          <label for="cfg">CFG</label>
+          <input type="number" id="cfg" name="cfg" value="{{ defaults.cfg }}" step="0.1"
+                 min="0" max="{{ limits['cfg'][1] }}">
+        </div>
+        <div class="w-md">
+          <label for="seed">种子（留空随机；想复现某张图时填）</label>
+          <input type="number" id="seed" name="seed" value="{{ defaults.seed if defaults.seed is not none else '' }}" min="0" placeholder="随机">
+        </div>
+        <div class="w-md">
+          <label for="sampler">采样器</label>
+          <select id="sampler" name="sampler">
+            {% for option in samplers %}
+            <option value="{{ option }}" {% if option == defaults.sampler %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="w-md">
+          <label for="scheduler">调度器</label>
+          <select id="scheduler" name="scheduler">
+            {% for option in schedulers %}
+            <option value="{{ option }}" {% if option == defaults.scheduler %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="field mt-2">
+        <label for="negative">负向提示词（可选，CFG 为 1 时不生效）</label>
+        <textarea id="negative" name="negative" maxlength="2000">{{ defaults.negative or '' }}</textarea>
+      </div>
+      <p class="small muted">相同参数会对应相同结果，探索新画面时可以更换种子。建议从默认值开始调整。</p>
+    </details>
+    <div class="submit-row"><button type="submit">开始生成 {{ icon("arrow") }}</button><span class="small muted">提交后可在任务历史查看进度</span></div>
+  </form>
+</div>
+<aside class="creator-aside"><div class="aside-symbol">{{ icon('image') }}</div><div><h2>描述一幅画面</h2><p>试着写下主体、环境、光线和风格。越具体，越容易接近你心里的画面。</p></div><div class="aside-tip"><small>GOOD TO KNOW</small><h2>留一点变化的空间</h2><p>想探索不同结果，可以调整种子。遇到喜欢的作品，收藏后随时回来微调。</p></div><div class="model-note" id="model-label">{{ model_label }}</div></aside>
+</div>
+
+<div class="section-head"><h2>最近生成</h2><a href="/jobs">查看全部 →</a></div>
+{% if recent %}
+<div class="thumbs">
+  {% for item in recent %}
+  <a href="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" target="_blank"
+     title="{{ item.prompt }}" aria-label="预览作品：{{ item.prompt }}" data-lightbox data-kind="image"
+     data-src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}"
+     data-title="{{ item.prompt }}" data-job="/jobs/{{ item.job_id }}"
+     data-download="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}">
+    <img src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" alt="{{ item.prompt }}" loading="lazy">
+  </a>
+  {% endfor %}
+</div>
+<p class="small muted mt-2"><a href="/jobs">全部任务 →</a> · <a href="/gallery">收藏 →</a></p>
+{% else %}
+<div class="empty">你的第一张图片，会从这里开始。</div>
+{% endif %}
+<script id="image-models" type="application/json">{{ image_models | tojson }}</script>
+<script src="/static/image-models.js" defer></script>
+{% endblock %}

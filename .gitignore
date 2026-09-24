@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+# 凭据永远不入库：Modal / 云厂商 / 私钥
+.modal.toml
+modal.toml
+*.pem
+*.key
+.venv*
+__pycache__/
+*.pyc
+outputs/
+.DS_Store
+.cache/
+probe/report-*.json
+probe/artifacts/
+data/
+.docker/

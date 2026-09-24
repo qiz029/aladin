@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}创作记录 · aladin{% endblock %}
+{% block body %}
+<div class="page-head job-head"><div>
+  <span class="eyebrow">The making of an idea</span>
+  <h1>创作记录 <span class="state {{ job.state }}" id="status">{{ states.get(job.state, job.state) }}</span></h1>
+  <p class="sub">{{ job.prompt or '从一张图片开始的创作' }}</p>
+  <div class="job-meta">{{ job.mode_label }} · {{ job.when }} · <span class="mono">{{ job.id[:8] }}</span></div>
+</div><a class="btn btn-ghost sm" href="/jobs">返回任务历史 {{ icon('arrow') }}</a></div>
+<div class="panel progress-panel">
+  <div class="progress-heading"><h2 id="headline">{{ '作品已就绪' if job.state == 'succeeded' else ('这次生成未完成' if job.state == 'failed' else ('正在规划画面' if job.mode == 'director' and not job.params.plan else '正在把想法变成画面')) }}</h2><span class="small muted"><span id="progressText">{{ '创作完成' if job.state == 'succeeded' else ('生成失败' if job.state == 'failed' else '准备中…') }}</span><span id="elapsed" class="nowrap">{% if job.elapsed %} · 用时 {{ job.elapsed }}{% endif %}</span></span></div>
+  <div class="bar{% if job.state == 'failed' %} failed{% elif not job.finished %} busy{% endif %}" id="bar" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100"{% if job.state == 'succeeded' %} aria-valuenow="100"{% endif %}><div id="progress" {% if job.state == 'succeeded' %}style="width:100%"{% endif %}></div></div>
+  <p class="err small mt-2" id="error" {% if not job.error or job.state != 'failed' %}style="display:none"{% endif %}>{{ job.error or '' }}</p>
+  <details><summary>查看运行记录</summary><pre class="log" id="log"></pre></details>
+</div>
+<div data-live="artifacts">
+<div class="section-head"><h2>生成作品 <span class="count">{{ job.artifacts|length }}</span></h2>{% if job.artifacts %}<a href="/jobs/{{ job.id }}/download">打包下载全部 ↓</a>{% endif %}</div>
+{% if job.artifacts and job.kind == 'video' %}
+<div class="panel player" id="artifacts">
+  {% for item in job.artifacts %}
+  <video src="/jobs/{{ job.id }}/artifacts/{{ item.name }}" controls autoplay loop muted
+         playsinline {% if job.input_path %}poster="/jobs/{{ job.id }}/input"{% endif %}></video>
+  {% endfor %}
+  <div class="bar-row mt-2">
+    {% for item in job.artifacts %}
+    <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}" download>
+      下载 {{ item.name }}（{{ (item.bytes / 1048576)|round(1) }} MiB）
+    </a>
+    {% if item.sha256 in job.gallery %}
+    <button class="ghost sm" disabled>已在收藏</button>
+    {% else %}
+    <button class="sm" onclick='addToGallery({{ item.name|tojson }}, this)'>加入收藏</button>
+    {% endif %}
+    {% endfor %}
+    {% for item in job.artifacts %}
+    <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}"
+       data-lightbox data-kind="video" data-src="/jobs/{{ job.id }}/artifacts/{{ item.name }}"
+       data-title="{{ item.prompt }}" data-job="/jobs/{{ job.id }}"
+       data-download="/jobs/{{ job.id }}/artifacts/{{ item.name }}">放大观看</a>
+    {% endfor %}
+    <a class="btn btn-ghost sm" href="/apps/video">再做一条</a>
+  </div>
+</div>
+{% elif job.artifacts %}
+<p><a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/compare">并排比较与人工评审</a>
+<a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/review.json">导出参数与评审记录</a></p>
+<div class="cards" id="artifacts">
+  {% for item in job.artifacts %}
+  <div class="card" data-key="{{ item.name }}">
+    <a href="/jobs/{{ job.id }}/artifacts/{{ item.name }}" target="_blank"
+       data-lightbox data-kind="image"
+       data-src="/jobs/{{ job.id }}/artifacts/{{ item.name }}"
+       data-title="{{ item.prompt }}" data-job="/jobs/{{ job.id }}"
+       data-download="/jobs/{{ job.id }}/artifacts/{{ item.name }}">
+      <img src="/jobs/{{ job.id }}/artifacts/{{ item.name }}" alt="{{ item.prompt }}" loading="lazy">
+    </a>
+    <div class="body">
+      <div class="small truncate">{{ item.name }}</div>
+      <div class="small muted">seed {{ item.seed }}</div>
+      <details><summary>提示词与参数</summary>
+        <p style="white-space:pre-wrap">{{ item.prompt }}</p>
+        {% if item.params %}<pre style="white-space:pre-wrap">{{ item.params|tojson(indent=2) }}</pre>{% endif %}
+      </details>
+      <div class="actions">
+        <a class="btn btn-ghost sm" href="/apps/edit?source=/jobs/{{ job.id }}/artifacts/{{ item.name }}">局部修复</a>
+        <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}" download>下载</a>
+        {% if job.mode in ['txt2img', 'director'] %}<a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}/reuse">用这套参数微调</a>{% endif %}
+        {% if item.kind != 'video' and item.sha256 in job.gallery %}
+        <button class="ghost sm" disabled>已在收藏</button>
+        {% else %}
+        <button class="sm" onclick='addToGallery({{ item.name|tojson }}, this)'>加入收藏</button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">画面正在路上。生成后，作品会自动出现在这里。</div>
+{% endif %}
+</div>
+
+
+<details class="job-parameters" {% if not job.artifacts %}open{% endif %}><summary>创作详情与完整参数</summary>
+<div class="panel">
+  <div class="bar-row">
+    <div class="grow">
+      <div class="small muted" data-live="summary">
+        {%- if job.mode == 'director' %}
+        一句话出图 · {{ ('已完成' if job.state == 'succeeded' else ('生成失败' if job.state == 'failed' else '生成中')) if job.params.plan else '规划中' }} · {{ (job.params.images|string + ' 张') if job.params.images else '张数自动决定' }}
+        {%- elif job.kind == 'video' %}
+        {{ job.mode_label }} · {{ job.params.frames }} 帧 @ {{ job.params.fps }}fps（约 {{ job.params.seconds }} 秒）·
+        {{ job.params.width }}×{{ job.params.height }} ·
+        {{ job.params.steps }} 步 · cfg {{ job.params.cfg }} · shift {{ job.params.shift }} ·
+        {{ job.params.sampler }}/{{ job.params.scheduler }} ·
+        seed <span class="mono">{{ job.params.seed }}</span>
+        {%- else %}
+        {{ job.mode_label }}{% if job.mode == "txt2img" %} · {{ job.model_label }}{% endif %} · {{ job.params.images }} 张
+        {%- if job.params.width %} · {{ job.params.width }}×{{ job.params.height }}
+        {%- else %} · 尺寸随输入图{% endif %} ·
+        {{ job.params.steps }} 步 · cfg {{ job.params.cfg }} ·
+        {{ job.params.sampler }}/{{ job.params.scheduler }} ·
+        seed <span class="mono">{{ job.params.seed }}</span>
+        {%- if job.params.denoise and job.mode == 'img2img' %} · 重绘 {{ job.params.denoise }}{% endif %}
+        {%- endif %}
+      </div>
+      <div class="small muted">任务号 <span class="mono">{{ job.id }}</span> · {{ job.when }}</div>
+      {% if job.params.prompt_defaults %}
+      <details><summary>实际发送的提示词（含默认标签）</summary>
+        <pre style="white-space:pre-wrap">{{ job.params.prompt_defaults.effective }}</pre>
+      </details>
+      {% endif %}
+      {% if job.params.region %}<p class="small">局部修复 · 原尺寸输出，选区外不变。区域 [左, 上, 右, 下]：{{ job.params.region|tojson }}（0–1 比例）</p>{% endif %}
+    </div>
+    <div data-live="actions" class="bar-row">
+    {% if job.mode != 'director' %}
+    <form data-enhanced method="post" action="/jobs/{{ job.id }}/vary">
+      <button type="submit" class="ghost sm">再来{{ '一条' if job.kind == 'video' else '一张' }}（种子 +1）</button>
+    </form>
+    {% endif %}
+    {% if job.finished %}
+    <form data-enhanced method="post" action="/jobs/{{ job.id }}/delete"
+          data-confirm="删除这个任务和它的本地产物？已加入收藏的副本会保留。">
+      <button type="submit" class="ghost sm">删除任务</button>
+    </form>
+    {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if job.mode == 'director' %}
+<div class="panel" id="planPanel">
+  <h2>生成计划</h2>
+  <p class="small muted">需求、每张图的提示词、参数与模型版本会随打包下载一起保存。</p>
+  {% if job.params.plan %}
+  {% for note in job.params.plan.notes %}<p class="small">{{ note }}</p>{% endfor %}
+  {% for variant in job.params.plan.variants %}
+  <details>
+    <summary>第 {{ loop.index }} 张 · {{ variant.width }}×{{ variant.height }} · {{ variant.steps }} 步 · CFG {{ variant.cfg }}</summary>
+    <p>{{ variant.rationale }}</p><pre style="white-space:pre-wrap">{{ variant.prompt }}</pre>
+    <p class="small muted">负向：{{ variant.negative or '无' }} · seed {{ variant.seed }}</p>
+  </details>
+  {% endfor %}
+  {% else %}<p>正在把你的想法变成具体画面，规划好后会自动开始生成。</p>{% endif %}
+</div>
+{% endif %}
+
+{% if job.input_path %}
+<h2>{{ '起始图' if job.kind == 'video' else '输入图' }}</h2>
+<div class="cards one">
+  <div class="card">
+    <a href="/jobs/{{ job.id }}/input" target="_blank"
+       data-lightbox data-kind="image" data-src="/jobs/{{ job.id }}/input"
+       data-title="起始图" data-job="/jobs/{{ job.id }}"
+       data-download="/jobs/{{ job.id }}/input">
+      <img src="/jobs/{{ job.id }}/input" alt="">
+    </a>
+    <div class="body">
+      <div class="small muted">{{ '视频起始图' if job.kind == 'video' else ('图生图的输入' if job.mode == 'img2img' else '指令编辑的输入') }}</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+</details>
+<script>
+const jobId = {{ job.id|tojson }};
+const log = document.getElementById('log');
+const barBox = document.getElementById('bar');
+const bar = document.getElementById('progress');
+const progressText = document.getElementById('progressText');
+const elapsedEl = document.getElementById('elapsed');
+const statusEl = document.getElementById('status');
+const STATES = {{ states|tojson }};
+const planning = {{ (job.mode == 'director' and not job.params.plan)|tojson }};
+const isVideo = {{ (job.kind == 'video')|tojson }};
+// 页面渲染时任务是否已结束：避免「已完成 -> 收到 end -> reload -> 又已完成」的死循环
+const alreadyFinished = {{ job.finished|tojson }};
+const createdAt = new Date({{ job.created_iso|tojson }});
+const headline = document.getElementById('headline');
+const baseTitle = document.title;
+// 标签页标题带上进度：切到别的标签页也能看到跑到哪了
+function setTitle(prefix) { document.title = prefix ? prefix + ' · ' + baseTitle : baseTitle; }
+
+// 采样开始前没有百分比可言（提交、冷启动、加载模型可能要几分钟），
+// 这段时间用不确定进度条，而不是一根停在 0 的空条。
+function setPercent(percent) {
+  barBox.classList.remove('busy');
+  bar.style.width = percent + '%';
+  barBox.setAttribute('aria-valuenow', percent);
+}
+function setBusy(text) {
+  barBox.classList.add('busy');
+  bar.style.width = '';
+  barBox.removeAttribute('aria-valuenow');
+  progressText.textContent = text;
+}
+
+function clock(date) {
+  return date.toLocaleTimeString('zh-CN', {hour12: false});
+}
+function appendLog(text, at) {
+  log.textContent += (at ? '[' + clock(new Date(at)) + '] ' : '') + text + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+
+// 与 api.overall_percent 同一算法：按「已采完几张」算整批进度。
+// ComfyUI 不按第 1、2、3 张的顺序采样（实测 2 → 3 → 1），按「当前第几张」算会倒退。
+let finished = new Set();
+function overallPercent(info) {
+  if (!info.max) return 0;
+  const images = info.total || 1;
+  const others = [...finished].filter(image => image !== info.image).length;
+  return Math.round(100 * (Math.min(others, images - 1) + Math.min(info.step, info.max) / info.max) / images);
+}
+
+function renderProgress(info) {
+  if (info.kind === 'step') {
+    if (info.step >= info.max) finished.add(info.image);
+    const percent = overallPercent(info);
+    setPercent(percent);
+    setTitle(percent + '%');
+    const total = info.total || 1;
+    const last = finished.size >= total;
+    const unit = isVideo || total === 1 ? '' : `已完成 ${Math.min(finished.size, total)}/${total} 张 · `;
+    progressText.textContent = last
+      ? (isVideo ? '采样完成，正在编码视频…' : '采样完成，正在保存并回传…')
+      : `${unit}采样 ${info.step}/${info.max} 步 · ${percent}%`;
+  } else if (info.kind === 'queued') {
+    // 这条来自容器内部：说明 GPU 容器已经起来了
+    setBusy(planning ? '容器已启动，正在规划画面…' : '容器已启动，正在加载模型…');
+  } else if (info.kind === 'artifact') {
+    // 某一张已经落到本地：只刷新产物区，其余张数继续采样
+    window.aladinRefreshLive?.();
+  } else if (info.kind === 'encoded') {
+    setPercent(100);
+    progressText.textContent = '视频编码完成，正在回传…';
+  }
+}
+
+// 账本事件（worker 写的）决定阶段文字；progress 事件由容器发出，决定百分比
+const STAGES = {
+  start: () => setBusy('正在提交到 Modal…'),
+  queued: () => { finished = new Set(); setBusy('已提交，等待 GPU 容器启动（冷启动可能要几分钟）…'); },
+  retry: () => { finished = new Set(); setBusy('上一次提交未确认，正在重试…'); },
+  unknown: () => setBusy('与 Modal 的联系中断，正在核对结果…'),
+};
+
+function tickElapsed() {
+  const seconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+  elapsedEl.textContent = ` · 已用时 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+let timer = null;
+if (!alreadyFinished) { tickElapsed(); timer = setInterval(tickElapsed, 1000); }
+
+if (!alreadyFinished) appendLog('准备开始，首次启动可能需要几分钟…');
+const source = new EventSource(`/jobs/${jobId}/stream`);
+source.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.kind === 'end') {
+    source.close();
+    if (timer) { clearInterval(timer); timer = null; }
+    statusEl.textContent = STATES[data.state] || data.state;
+    statusEl.className = 'state ' + data.state;
+    if (data.state === 'succeeded') {
+      setPercent(100);
+      progressText.textContent = '创作完成';
+      headline.textContent = '作品已就绪';
+      setTitle(alreadyFinished ? '' : '✓ 已完成');
+      // 只有「打开页面时还在跑」的任务需要取回产物；局部刷新，已经显示的图不会闪
+      if (!alreadyFinished) window.aladinRefreshLive?.();
+    } else {
+      barBox.classList.remove('busy');
+      barBox.classList.add('failed');
+      progressText.textContent = '生成失败';
+      headline.textContent = '这次生成未完成';
+      setTitle(alreadyFinished ? '' : '✕ 未完成');
+      const box = document.getElementById('error');
+      box.style.display = 'block';
+      box.textContent = data.error || '未知错误';
+    }
+    return;
+  }
+  if (data.kind === 'planned' && planning) { headline.textContent = '正在把想法变成画面'; source.close(); location.reload(); return; }
+  if (data.kind === 'progress') {
+    // progress 事件里带的是 JSON 字符串（含 step/image/total/max）；逐步采样不进日志，太吵
+    try {
+      const info = JSON.parse(data.message);
+      renderProgress(info);
+      if (info.kind === 'artifact') appendLog(`第 ${info.index}/${info.total} 张已就绪`, data.at);
+      else if (info.kind !== 'step') appendLog(info.kind === 'queued' ? '容器已启动' : data.message, data.at);
+    } catch (e) {}
+    return;
+  }
+  if (STAGES[data.kind]) STAGES[data.kind]();
+  appendLog(data.message, data.at);
+};
+
+async function addToGallery(name, button) {
+  // /gallery 收的是表单编码，不是 JSON
+  const body = new URLSearchParams({job_id: jobId, name: name});
+  try {
+    button.disabled = true;
+    const response = await fetch('/gallery', {method: 'POST', body: body});
+    if (!response.ok) throw new Error(response.status);
+    button.disabled = true;
+    button.textContent = '已在收藏';
+  } catch (error) {
+    button.disabled = false;
+    alert('加入收藏失败：' + error.message);
+  }
+}
+</script>
+{% endblock %}

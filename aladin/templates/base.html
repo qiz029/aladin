@@ -1,0 +1,57 @@
+{% from 'icons.html' import icon %}
+{% from 'rating.html' import rating_field %}
+{% set states = {'pending':'等待开始', 'submitting':'准备中', 'submitted':'已排队', 'running':'生成中', 'succeeded':'已完成', 'failed':'未完成', 'unknown':'等待恢复'} %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f6f5f2">
+<title>{% block title %}aladin · 创作工作室{% endblock %}</title>
+<link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+<script>
+// 隐私模式默认开：作品缩略图模糊，悬停/聚焦或点开大图才显示。放在 <head> 里同步执行，避免先闪出清晰图。
+(() => { let on = true; try { on = localStorage.getItem('aladin.privacy') !== 'off'; } catch (e) {}
+  if (on) document.documentElement.dataset.privacy = 'blur'; })();
+</script>
+<link rel="stylesheet" href="/static/studio.css?v=20260924b">
+<script src="/static/studio.js?v=20260924d" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="aladin 创作工作室首页"><img src="/static/mark.svg" width="30" height="30" alt=""><span>aladin<span class="brand-caption">YOUR CREATIVE SPACE</span></span></a>
+  <nav aria-label="主导航">
+    <a href="/" class="nav-home {% if request.url.path == '/' %}on{% endif %}" {% if request.url.path == '/' %}aria-current="page"{% endif %}>{{ icon('home') }}<span>工作室</span></a>
+    <p class="nav-label">创作</p>
+    {% for slug, label, glyph in [('director','一句话出图','spark'),('image','生成图片','image'),('edit','改图','edit'),('video','生成视频','video')] %}
+    <a href="/apps/{{ slug }}" {% if request.url.path.startswith('/apps/' + slug) %}class="on" aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ label }}</span>{% if slug == 'director' %}<span class="nav-dot"></span>{% endif %}</a>
+    {% endfor %}
+    <p class="nav-label">作品</p>
+    <a href="/jobs" {% if request.url.path.startswith('/jobs') %}class="on" aria-current="page"{% endif %}>{{ icon('jobs') }}<span>任务历史</span></a>
+    <a href="/gallery" {% if request.url.path.startswith('/gallery') %}class="on" aria-current="page"{% endif %}>{{ icon('gallery') }}<span>我的收藏</span></a>
+  </nav>
+  <div class="sidebar-bottom">
+    <div id="billing" class="billing" hidden></div>
+    <a class="api-link" href="/docs" target="_blank" rel="noopener">{{ icon('code') }}<span>API 文档</span><span aria-hidden="true">↗</span></a>
+    <div class="sidebar-note">给每一个想法，留一点空间。</div>
+  </div>
+</aside>
+<div class="workspace">
+  <header class="workspace-header"><span>个人工作室 <span class="header-slash">/</span> <span class="header-current">{% if request.url.path.startswith('/apps/director') %}一句话出图{% elif request.url.path.startswith('/apps/image') %}生成图片{% elif request.url.path.startswith('/apps/edit') %}改图{% elif request.url.path.startswith('/apps/video') %}生成视频{% elif request.url.path.startswith('/jobs') %}任务历史{% elif request.url.path.startswith('/gallery') %}我的收藏{% else %}概览{% endif %}</span></span><span class="header-note"><button type="button" class="ghost sm privacy-toggle" id="privacyToggle" aria-pressed="true" title="作品缩略图模糊显示，悬停或点开大图时才看得清">隐私模式</button>一点想象，无限可能 {{ icon('spark') }}</span></header>
+  <main id="main">
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="workspace-footer"><span>Made for your imagination.</span><span>aladin studio</span></footer>
+</div>
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="作品预览" hidden>
+  <div class="lightbox-stage" id="lightboxStage"></div>
+  <div class="lightbox-bar">
+    <span class="lightbox-title" id="lightboxTitle"></span><span class="spacer"></span>
+    <a class="btn btn-ghost sm" id="lightboxJob" href="#" hidden>任务页</a>
+    <a class="btn btn-ghost sm" id="lightboxDownload" href="#" download>下载</a>
+    <button class="btn-ghost sm" id="lightboxClose" type="button" data-lightbox-close>关闭 {{ icon('close') }}</button>
+  </div>
+</div>
+</body>
+</html>

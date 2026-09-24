@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}一句话出图 · aladin{% endblock %}
+{% block body %}
+<div class="page-head director-head">
+  <span class="eyebrow">Imagine, then create</span>
+  <h1>一个想法，<br>就是创作的开始。</h1>
+  <p class="sub">说说你想看到的画面。构图、提示词和参数，交给 aladin 来安排。</p>
+</div>
+<div class="director-layout">
+  <div>
+    <form class="panel director-form" method="post" action="/apps/director/jobs" id="directorForm" data-enhanced>
+      <label for="brief">你想创作什么？</label>
+      <textarea id="brief" name="brief" required maxlength="4000" placeholder="我想给一家海边咖啡馆做两张宣传图。一张是清晨的店外全景，一张是窗边咖啡的特写。温暖自然，有胶片颗粒感，不要文字。"></textarea>
+      <div class="director-examples">
+        <span>试试这些灵感</span>
+        <button type="button" class="ghost sm" data-example="为一款陶瓷茶壶做两张产品照：一张白底正面，一张暖色木桌上的近景。强调釉面质感，不要文字。">产品照片 ↗</button>
+        <button type="button" class="ghost sm" data-example="一座雨夜里的未来城市，霓虹映在湿润的路面。用不同角度表现孤独感，电影构图，不要文字。">电影场景 ↗</button>
+        <button type="button" class="ghost sm" data-example="为一本儿童绘本画三张森林小屋插图，水彩风格，清晨、午后和夜晚各一张，保持小屋外观一致。">系列插画 ↗</button>
+      </div>
+      {{ rating_field('qwen') }}
+      <div class="submit-row">
+        <span class="small muted">自动规划 1–8 张图片<br>也可以在描述里指定张数</span>
+        <button type="submit" id="directorSubmit">开始创作 {{ icon('arrow') }}</button>
+      </div>
+    </form>
+    <p class="director-note">首次启动可能需要数分钟。提交后可以离开，在任务历史里查看进度。</p>
+  </div>
+  <aside class="director-guide" aria-label="创作流程">
+    <div class="guide-art" aria-hidden="true">{{ icon('spark') }}</div>
+    <div class="guide-step"><span>01</span><div><h3>从你的想法出发</h3><p>主题、用途、喜欢的氛围。用平常说话的方式描述就好。</p></div></div>
+    <div class="guide-step"><span>02</span><div><h3>让画面慢慢成形</h3><p>自动规划每一张图，再逐张生成。过程随时可查看。</p></div></div>
+    <div class="guide-step"><span>03</span><div><h3>保留每一次灵感</h3><p>下载图片和完整参数，收藏喜欢的作品，或接着微调。</p></div></div>
+  </aside>
+</div>
+{% endblock %}

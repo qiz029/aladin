@@ -1,0 +1,53 @@
+{
+  "version": "people-v1",
+  "seed": 4100,
+  "images": 4,
+  "size": "portrait",
+  "cases": [
+    {
+      "id": "standing",
+      "label": "全身站立",
+      "prompt": "Full-body photograph of one adult standing naturally, both arms relaxed at their sides, both hands and both feet visible, neutral studio background."
+    },
+    {
+      "id": "seated",
+      "label": "坐姿",
+      "prompt": "Full-body photograph of one adult seated on a chair, hands resting separately on their thighs, knees bent naturally, both feet visible on the floor."
+    },
+    {
+      "id": "cup",
+      "label": "握杯",
+      "prompt": "Waist-up photograph of one adult holding a ceramic mug by its handle with their right hand, left hand resting on a table, both hands clearly visible."
+    },
+    {
+      "id": "crossed_arms",
+      "label": "交叉手臂",
+      "prompt": "Photograph of one adult with arms crossed comfortably across their chest, hands visible, natural shoulders and elbows, frontal view."
+    },
+    {
+      "id": "walking",
+      "label": "行走",
+      "prompt": "Full-body photograph of one adult walking along a path, one foot forward, opposite arm forward, both hands and feet in frame."
+    },
+    {
+      "id": "handshake",
+      "label": "双人握手",
+      "prompt": "Full-body photograph of two adults facing each other and shaking right hands, their left arms relaxed separately, all four feet visible."
+    },
+    {
+      "id": "embrace",
+      "label": "双人拥抱",
+      "prompt": "Photograph of two adults embracing, three-quarter view, natural overlapping arms and shoulders, waist-up composition."
+    },
+    {
+      "id": "foreshortened_hand",
+      "label": "手部透视",
+      "prompt": "Photograph of one adult reaching an open right hand toward the camera, palm and fingers visible in perspective, left arm relaxed at their side."
+    }
+  ],
+  "notes": [
+    "每个模型使用自己的默认参数，保持场景、尺寸档位和种子列表一致；跨模型相同 seed 不代表相同构图。",
+    "模型名和画风不能替代人工评审；动漫用途应单独建立同风格对照组。",
+    "未评审、不确定和不适用分别统计，不算合格。"
+  ]
+}

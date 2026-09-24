@@ -1,0 +1,16 @@
+{#- 尺度选择：同一个选择在不同模型下补不同的词，提示行由 studio.js 按当前模型实时计算。
+    family 固定时（改图、视频、一句话出图）直接给；生图页跟随 #model 选择。 -#}
+{% macro rating_field(family='qwen', selected=None, follow_model=False) -%}
+{%- set policy = prompt_policy() -%}
+{%- set selected = selected or policy.default_rating -%}
+<div class="field rating-field" data-rating-family="{{ family }}"{% if follow_model %} data-follow-model{% endif %}>
+  <label>尺度</label>
+  <div class="chips">
+    {% for key, label in policy.ratings.items() %}
+    <label class="chip"><input type="radio" name="rating" value="{{ key }}" {% if key == selected %}checked{% endif %}><span>{{ label }}</span></label>
+    {% endfor %}
+  </div>
+  <p class="small muted" data-rating-hint></p>
+  <script type="application/json" data-rating-policy>{{ policy|tojson }}</script>
+</div>
+{%- endmacro %}

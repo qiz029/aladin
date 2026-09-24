@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}工作室 · aladin{% endblock %}
+{% block body %}
+<section class="hero">
+  <div class="hero-copy">
+    <span class="eyebrow">A little space for big ideas</span>
+    <h1>把脑海里的画面，<br>变成眼前的作品。</h1>
+    <p class="sub">从一句话、一张图开始。<br>生成、修改、让它动起来，留住每一个好想法。</p>
+    <div class="hero-actions"><a class="btn" href="/apps/director">开始创作 {{ icon('arrow') }}</a><a class="text-link" href="/gallery">看看我的收藏 ↗</a></div>
+  </div>
+  <div class="hero-art" aria-hidden="true"><div class="art-frame"><div class="art-sun"></div><div class="art-hill"></div><div class="art-hill second"></div></div><div class="art-spark">{{ icon('spark') }}</div><div class="art-label">{{ icon('spark') }} 让想象，有迹可循</div></div>
+</section>
+<div class="cards apps">
+  {% for slug, label, glyph, description in [('director','一句话出图','spark','只管描述想法，自动规划一组画面。'),('image','生成图片','image','写下提示词，细调你的每一张图。'),('edit','改图','edit','以原图为起点，探索新的可能。'),('video','生成视频','video','给静止的画面，加一点生命力。')] %}
+  <a class="app app-{{ slug }}" href="/apps/{{ slug }}"><span class="app-symbol">{{ icon(glyph) }}</span><span class="app-arrow">{{ icon('arrow') }}</span><div class="name">{{ label }}</div><div class="desc">{{ description }}</div></a>
+  {% endfor %}
+</div>
+<div data-live="running">
+{% if running %}
+<div class="section-head"><h2>正在创作 <span class="count">{{ running|length }}</span></h2><a href="/jobs">查看任务 {{ icon('arrow') }}</a></div>
+<ul class="rows">
+  {% for job in running %}
+  <li data-key="{{ job.id }}"><span class="job-thumb">{{ icon('video' if job.kind == 'video' else 'spark') }}</span><div class="grow"><div class="truncate"><a href="/jobs/{{ job.id }}">{{ job.prompt or '未填写提示词' }}</a></div><div class="small muted">{{ job.mode_label }}{% if job.progress and job.progress.percent is not none %} · {{ job.progress.percent }}%{% endif %}</div></div><span class="state {{ job.state }}">{{ states.get(job.state, job.state) }}</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if running %}<span data-live-active hidden></span>{% endif %}
+</div>
+<div data-live="recent">
+<div class="section-head"><h2>最近的灵感</h2><a href="/jobs">全部作品 {{ icon('arrow') }}</a></div>
+{% if recent %}
+<div class="cards home-recent">
+  {% for item in recent %}
+  <div class="card" data-key="{{ item.job_id }}/{{ item.name }}"><a href="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" data-lightbox data-kind="image" data-src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" data-title="{{ item.prompt }}" data-job="/jobs/{{ item.job_id }}" data-download="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" aria-label="预览图片：{{ item.prompt }}"><img src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" alt="{{ item.prompt }}" loading="lazy"></a><div class="body"><div class="small truncate">{{ item.prompt or '新的画面' }}</div><a class="small muted" href="/jobs/{{ item.job_id }}">查看创作记录 ↗</a></div></div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">{{ icon('image') }}<span>这里将放下你的第一份灵感。<a href="/apps/director">开始创作 →</a></span></div>
+{% endif %}
+</div>
+{% if videos %}
+<div class="section-head"><h2>会动的画面</h2><a href="/apps/video">生成视频 {{ icon('arrow') }}</a></div>
+<div class="cards">
+  {% for item in videos %}
+  <div class="card"><a href="/jobs/{{ item.job_id }}" data-lightbox data-kind="video" data-src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" data-title="{{ item.prompt }}" data-job="/jobs/{{ item.job_id }}" data-download="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" aria-label="播放视频：{{ item.prompt }}"><video src="/jobs/{{ item.job_id }}/artifacts/{{ item.name }}" preload="metadata" muted playsinline></video><span class="media-tag">{{ icon('video') }} 视频</span></a><div class="body"><div class="small truncate">{{ item.prompt or '新的片段' }}</div><a class="small muted" href="/jobs/{{ item.job_id }}">查看创作记录 ↗</a></div></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
