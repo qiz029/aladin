@@ -293,6 +293,20 @@ uv --cache-dir .cache/uv run python -m unittest probe.test_watchdog
 - **不进共享缓存**：除 `/static` 外所有响应带 `Cache-Control: private, no-cache`，CDN 不会在边缘节点存图。
 - **删除即清理远端**：删除任务时登记到 `remote_purge`，worker 每分钟删掉 Modal 结果 Volume 上对应目录。
 
+## LoRA
+
+Pony 与 Anima 支持叠加 LoRA（生图页选中这两个模型时出现 LoRA 面板；API 是 `loras` 字段）。
+
+- **目录**：`aladin/loras.py`。每项钉死 Civitai 的版本 ID 与 sha256，带默认强度、区间、触发词、互斥组、建议采样参数，
+  以及内置预设。页面上还可以把当前组合存成自己的预设（存在浏览器里）。
+- **同步**：`python -m aladin loras-sync [--only ID ...] [--dry-run]` 在本机下载、校验 sha256、上传到
+  对应底模的模型 Volume（`loras/civitai-<版本>.safetensors`）。Civitai API key 放在 `.env` 的 `CIVITAI_API_KEY`，
+  只在本机使用，不进 Modal。
+- **容器**：只收「文件 + sha256 + 强度」，在加载器之后串接 `LoraLoader`，首次使用时核对 sha256 并记标记。
+  增删 LoRA、调默认值只改目录、再同步一次，**不用重新部署 Modal**。
+- **触发词**自动补到提示词末尾，冻结进 `params.prompt_defaults.triggers`；LoRA 选择与强度参与幂等键。
+- Qwen-Image 2.1 是新架构，旧 Qwen LoRA 不兼容（加载后静默无效），所以暂不支持。
+
 ## 收藏整理
 
 收藏页可按提示词搜索，按类型、模型、尺度、星级、标签筛选，按时间或星级排序；

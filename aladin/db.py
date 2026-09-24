@@ -54,22 +54,38 @@ def create_job(prompt: str, params: dict, request: dict, result_key: str,
                shape: str | None = None, call_id: str | None = None,
                mode: str = 'txt2img', input_sha256: str | None = None,
                input_path: str | None = None, app: str = 'image') -> str:
-    """登记任务。`result_key` 上有唯一约束，同参数重复登记会抛 IntegrityError。
+    """登记任务。`result_key` 上有唯一约束，同参数重复登记会抛 UniqueViolation。
 
     这是幂等闸门：result_key 由 prompt + 全部生成参数 + 输入图哈希算出，重跑没有意义。
+    例外是**已失败**的同参数任务：它没有产物，挡住重提只会让人卡住（例如部署不同步导致的
+    revision mismatch 修好之后）。这种情况就地把那一行重置为 pending 再跑一次，沿用原任务号。
     输入图只存路径与哈希：字节不进 JSONB（否则每行十几 MB），
     由 worker 在提交时读出来随请求发给容器。
     """
     job_id = uuid.uuid4().hex
     with connect() as connection:
-        connection.execute(
+        row = connection.execute(
             'INSERT INTO jobs (id, app, state, prompt, params, request, result_key,'
             ' call_id, image_count, attempts, mode, input_sha256, input_path)'
-            ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+            ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+            ' ON CONFLICT (result_key) DO UPDATE SET'
+            "  state = 'pending', prompt = EXCLUDED.prompt, params = EXCLUDED.params,"
+            '  request = EXCLUDED.request, image_count = EXCLUDED.image_count,'
+            '  input_path = EXCLUDED.input_path, call_id = NULL, attempts = 0,'
+            '  last_error = NULL, finished_at = NULL, submitted_at = NULL, next_poll_at = NULL,'
+            '  lease_owner = NULL, lease_expires_at = NULL'
+            "  WHERE jobs.state = 'failed'"
+            ' RETURNING id',
             (job_id, app, 'pending', prompt, dumps(params), dumps(request),
              result_key, call_id, params.get('images', 1), 1 if call_id else 0,
-             mode, input_sha256, input_path))
-    return job_id
+             mode, input_sha256, input_path)).fetchone()
+        if row is None:
+            # 撞上的是未失败的任务：保持原来的幂等语义，由调用方反查已存在任务
+            raise psycopg.errors.UniqueViolation('相同参数的任务已存在')
+    if row['id'] != job_id:
+        add_event(row['id'], 'retry', '同参数重新提交：上次失败，重置后再跑一次')
+        notify(row['id'])
+    return row['id']
 
 
 def update_job(job_id: str, **fields: Any) -> None:

@@ -158,6 +158,8 @@ def main() -> int:
     submit.add_argument('--scheduler')
     submit.add_argument('--seed', type=int, default=None, help='省略为随机')
     submit.add_argument('--negative', default=None)
+    submit.add_argument('--lora', action='append', default=[], metavar='ID[:STRENGTH]',
+                        help='叠加 LoRA（仅 Pony / Anima），可重复；可选 id 见 GET /api/v1/loras')
     submit.add_argument('--rating', choices=('general', 'suggestive', 'explicit'),
                         help='尺度：日常 / 暗示 / 露骨；省略用服务端默认')
     submit.add_argument('--wait', action='store_true')
@@ -346,6 +348,11 @@ def main() -> int:
                    'steps': args.steps, 'seed': args.seed, 'negative': args.negative,
                    'model': args.model, 'cfg': args.cfg, 'sampler': args.sampler,
                    'scheduler': args.scheduler, 'rating': args.rating}
+        if args.lora:
+            payload['loras'] = [
+                dict(id=spec.split(':', 1)[0],
+                     **({'strength': float(spec.split(':', 1)[1])} if ':' in spec else {}))
+                for spec in args.lora]
         payload = {k: v for k, v in payload.items() if v is not None}
     else:
         data = Path(args.image).read_bytes()

@@ -146,6 +146,17 @@ CLI 对应 `--rating`。服务端按模型把尺度换成该模型认的词，**
 任务 `params.prompt_defaults` 保存 original / effective / tags / rating / family，任务页可展开看实际发送的内容；
 「再来一张」沿用原任务的配置。尺度参与幂等键：同提示词换尺度是新任务。加上标签后超过 2000 字符会被拒绝，不截断。
 
+## LoRA（仅 Pony / Anima）
+
+`POST /api/v1/images` 可带 `loras: [{"id": "...", "strength": 0.7}]`，最多 6 个；省略 strength 用默认值。
+可选项、默认强度、区间、触发词与内置预设见 `GET /api/v1/loras`（按 family：pony / anima 分）。
+- 选了 LoRA，服务端自动把它的**触发词**补到提示词末尾；不用自己写。
+- 跨底模（例如给 Qwen 或 Anima 选 Pony 的 LoRA）、强度越界、两个漫画生成器同时用 → 422。
+- 滑杆类（*-slider）可以取负值；同时用多个体位 / 画风 LoRA 不会被拒，但结果常互相干扰。
+- `anima-turbo` 需要 CFG 1、8–12 步、euler 采样器，调用时要自己把这三个参数一起传。
+- 任务 `params.loras` 记录版本号、文件与 sha256，可精确复现。
+- CLI：`submit "..." --model pony-realism-2.2 --lora pony-realism-enhancer:0.7 --lora real-skin-slider:2 --wait`
+
 ## 收藏整理
 
 - `GET /api/v1/gallery?q=&tag=&model=&kind=&min_stars=&rating=&sort=`：检索（q 搜提示词，不分大小写）。

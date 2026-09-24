@@ -104,6 +104,9 @@
         {%- if job.params.denoise and job.mode == 'img2img' %} · 重绘 {{ job.params.denoise }}{% endif %}
         {%- endif %}
       </div>
+      {% if job.params.loras %}
+      <div class="small muted">LoRA：{% for l in job.params.loras %}{{ l.name }} <span class="mono">{{ l.strength }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+      {% endif %}
       <div class="small muted">任务号 <span class="mono">{{ job.id }}</span> · {{ job.when }}</div>
       {% if job.params.prompt_defaults %}
       <details><summary>实际发送的提示词（含默认标签）</summary>

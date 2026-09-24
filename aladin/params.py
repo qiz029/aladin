@@ -37,7 +37,7 @@ def parse_seed(text: str | None) -> tuple[int | None, str]:
 def image_params(prompt: str, images: int, size: str, negative: str, steps: int,
                  cfg: float, sampler: str, scheduler: str,
                  seed: int | None, model: str = DEFAULT_MODEL, *, prompt_tags=None,
-                 rating: str | None = None) -> tuple[dict, list[str]]:
+                 rating: str | None = None, loras=None) -> tuple[dict, list[str]]:
     """文生图参数。尺寸是预设键，解析成宽高后仍按 PARAM_LIMITS 校验一遍。"""
     spec = MODELS.get(model, MODELS[DEFAULT_MODEL])
     defaults = spec['defaults']
@@ -84,10 +84,17 @@ def image_params(prompt: str, images: int, size: str, negative: str, steps: int,
     if not limits['seed'][0] <= seed <= limits['seed'][1]:
         errors.append('随机种子超出范围')
     rating = _rating(rating, errors)
+    from .loras import resolve, triggers_for
+    chosen, lora_errors = resolve(loras, model)
+    errors.extend(lora_errors)
     params = {'model': model, 'negative': negative or '', 'size': size, 'width': width,
               'height': height, 'steps': steps, 'cfg': cfg,
               'sampler': sampler, 'scheduler': scheduler, 'seed': seed,
               'rating': rating, 'prompt_family': family_for(model)}
+    if chosen:
+        # 触发词是这次任务的一部分：冻结进 prompt_defaults，复现与「再来一张」都沿用
+        params['loras'] = chosen
+        params['lora_triggers'] = triggers_for(chosen)
     return validate_length(prompt, params, limits['prompt_chars'], errors, prompt_tags), errors
 
 

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,9 +41,51 @@ def validate(request):
         raise ValueError('Invalid seed')
     if params['sampler'] not in spec['samplers'] or params['scheduler'] not in spec['schedulers']:
         raise ValueError('Unsupported sampler/scheduler')
-    if build(prompts[0], len(prompts), params) != request:
+    validate_loras(request.get('loras', []))
+    rebuilt_params = dict(params, loras=[dict(item) for item in request.get('loras', [])])
+    if build(prompts[0], len(prompts), rebuilt_params) != request:
         raise ValueError('Request or worker revision mismatch')
     return request
+
+
+LORA_FILE = re.compile(r'^civitai-\d+\.safetensors$')
+
+
+def validate_loras(loras):
+    """容器只认白名单形状：固定命名的文件、64 位 sha256、有限的强度。目录与名称在宿主侧。"""
+    if not isinstance(loras, list) or len(loras) > 6:
+        raise ValueError('Invalid LoRA list')
+    for item in loras:
+        if not isinstance(item, dict) or set(item) != {'file', 'sha256', 'strength'}:
+            raise ValueError('Invalid LoRA entry')
+        if not isinstance(item['file'], str) or not LORA_FILE.match(item['file']):
+            raise ValueError('Invalid LoRA file name')
+        if not isinstance(item['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', item['sha256']):
+            raise ValueError('Invalid LoRA checksum')
+        strength = item['strength']
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)) \
+                or not math.isfinite(strength) or not -10 <= strength <= 10:
+            raise ValueError('Invalid LoRA strength')
+
+
+def ensure_loras(loras, root):
+    """LoRA 由宿主侧的 loras-sync 预先放进模型 Volume；这里只核对，不下载。
+
+    校验结果记在旁边的标记文件里：大文件每次都算 sha256 太慢，而 Volume 上的文件不会被改写。
+    """
+    for item in loras:
+        target = root / 'loras' / item['file']
+        if not target.is_file():
+            raise ValueError('LoRA not synced to volume: ' + item['file'] + '（先运行 python -m aladin loras-sync）')
+        marker = target.with_suffix('.verified.json')
+        stamp = dict(size=target.stat().st_size, sha256=item['sha256'])
+        if marker.exists() and json.loads(marker.read_text()) == stamp:
+            continue
+        with target.open('rb') as handle:
+            actual = hashlib.file_digest(handle, 'sha256').hexdigest()
+        if actual != item['sha256']:
+            raise ValueError('LoRA checksum mismatch: ' + item['file'])
+        runtime.atomic_json(marker, stamp)
 
 
 def ensure_weights(model, root):
@@ -82,6 +125,14 @@ def workflow(request):
             '1': dict(class_type='CheckpointLoaderSimple', inputs=dict(ckpt_name='ponyRealism_v22MainVAE.safetensors')),
             '2': dict(class_type='CLIPSetLastLayer', inputs=dict(clip=['1', 1], stop_at_clip_layer=-2))})
         model, clip, vae = ['1', 0], ['2', 0], ['1', 2]
+    # LoRA 串在加载器之后：每个 LoraLoader 同时改模型与文本编码器，后一个接前一个的输出。
+    # 叠加是加法，顺序不影响结果；节点号用 200+ 以免与采样节点冲突。
+    for index, item in enumerate(request.get('loras', [])):
+        node = str(200 + index)
+        graph[node] = dict(class_type='LoraLoader', inputs=dict(
+            model=model, clip=clip, lora_name=item['file'],
+            strength_model=item['strength'], strength_clip=item['strength']))
+        model, clip = [node, 0], [node, 1]
     graph['4'] = dict(class_type='CLIPTextEncode', inputs=dict(text=p['negative'], clip=clip))
     graph['5'] = dict(class_type='EmptyLatentImage', inputs=dict(width=p['width'], height=p['height'], batch_size=1))
     for index, prompt in enumerate(request['prompts']):
@@ -95,7 +146,7 @@ def workflow(request):
 
 def start_server(root):
     config = Path('/tmp/extra-image-models.yaml')
-    config.write_text('aladin:\n    base_path: ' + str(root) + '\n' + ''.join(f'    {name}: {name}\n' for name in ('diffusion_models', 'text_encoders', 'vae', 'checkpoints')))
+    config.write_text('aladin:\n    base_path: ' + str(root) + '\n' + ''.join(f'    {name}: {name}\n' for name in ('diffusion_models', 'text_encoders', 'vae', 'checkpoints', 'loras')))
     log = open('/tmp/comfy-server.log', 'w')
     process = subprocess.Popen(['python', 'main.py', '--listen', '127.0.0.1', '--port', '8188', '--disable-auto-launch', '--extra-model-paths-config', str(config), '--output-directory', '/tmp/comfy/output', '--disable-metadata'], cwd='/opt/ComfyUI', stdout=log, stderr=subprocess.STDOUT)
     try:
@@ -126,6 +177,7 @@ def execute(request, result_root):
         return cached
     root = Path('/models')
     ensure_weights(request['modelId'], root)
+    ensure_loras(request.get('loras', []), root)
     process, log = start_server(root)
     try:
         graph = workflow(request)
@@ -149,6 +201,8 @@ def execute(request, result_root):
             tmp.replace(output / name)
             seed = request['params']['seed'] + index
             params = dict(request['params'], seed=seed)
+            if request.get('loras'):
+                params['loras'] = request['loras']
             if request['modelId'] == 'pony-realism-2.2':
                 params['clip_skip'] = 2
             images.append(dict(index=index+1, file=name, sha256=runtime.digest(data), bytes=len(data), format='png', prompt=prompt, seed=seed, params=params))

@@ -71,10 +71,16 @@ def prepare(prompt: str, params: dict, tags: list[str] | None = None,
         if tags is None:
             tags = tags_for(family, rating)
         placement = placement or FAMILIES[family]['placement']
-        policy = {'original': original,
-                  'effective': compile_prompt(original, list(tags), placement),
+        effective = compile_prompt(original, list(tags), placement)
+        # LoRA 触发词总在最后；提示词里已经写过的不重复
+        triggers = list(params.get('lora_triggers') or [])
+        if triggers:
+            effective = compile_prompt(effective, triggers, 'suffix')
+        policy = {'original': original, 'effective': effective,
                   'tags': list(tags), 'rating': rating, 'family': family,
                   'placement': placement}
+        if triggers:
+            policy['triggers'] = triggers
     return dict(params, prompt_defaults=policy)
 
 

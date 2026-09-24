@@ -479,3 +479,24 @@ textarea{min-height:140px}
 .tag-remove{background:none;border:0;padding:0 4px;font-size:12px;line-height:1;color:var(--muted);cursor:pointer;box-shadow:none}
 .tag-input{flex:1 1 80px;min-width:60px;font-size:11px;padding:3px 8px;height:auto}
 @media(max-width:640px){.gallery-filters select{flex:1 1 calc(50% - 5px)}}
+
+/* LoRA 面板 */
+.lora-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.lora-head label{margin:0}
+.lora-head select{width:auto;flex:0 1 180px}
+.lora-group{margin-top:8px;border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 12px}
+.lora-group summary{font-size:12px;cursor:pointer;padding:4px 0}
+.lora-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,220px);gap:4px 14px;align-items:center;padding:8px 0;border-top:1px solid var(--line-soft)}
+.lora-row:first-of-type{border-top:0}
+.lora-row .lora-name{display:flex;align-items:center;gap:8px;margin:0;font-size:13px;min-width:0}
+.lora-row .lora-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lora-row .lora-name a{text-decoration:none}
+.lora-strength{display:flex;align-items:center;gap:8px}
+.lora-strength input[type=range]{flex:1;min-width:0}
+.lora-number{width:64px;flex:0 0 64px;padding:4px 6px}
+.lora-meta,.lora-chips{grid-column:1/-1}
+.lora-row:not(.on) .lora-strength{opacity:.45}
+.lora-chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip-word{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface-2);border:0;box-shadow:none;cursor:pointer;color:var(--fg)}
+.lora-warnings{color:var(--warn);min-height:1em;margin-top:8px}
+@media(max-width:640px){.lora-row{grid-template-columns:1fr}}

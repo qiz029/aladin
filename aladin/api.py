@@ -55,6 +55,11 @@ def review_artifact(job_id: str, name: str, body: ArtifactReview):
     return review
 
 
+class LoraChoice(BaseModel):
+    id: str = Field(..., description='LoRA id，见 GET /api/v1/loras')
+    strength: float | None = Field(None, description='强度；省略用目录里的默认值')
+
+
 class ImageRequest(BaseModel):
     """Omitted generation parameters use the selected model's defaults."""
     prompt: str
@@ -67,6 +72,7 @@ class ImageRequest(BaseModel):
     sampler: str | None = None
     scheduler: str | None = None
     seed: int | None = Field(None, description='省略为随机；实际值写在返回任务的 params.seed')
+    loras: list[LoraChoice] | None = Field(None, description='叠加的 LoRA（仅 Pony / Anima），最多 6 个')
     rating: str | None = Field(None, description='尺度：general 日常 / suggestive 暗示 / explicit 露骨；省略用服务端默认')
 
 
@@ -243,6 +249,8 @@ def capabilities() -> dict:
             'artifact_review': {'method': 'PUT', 'path': '/api/v1/jobs/{id}/artifacts/{name}/review',
                                 'body': '人工评审：anatomy, matches_request, preferred, notes'},
             'params': '/api/v1/params',
+            'loras': {'method': 'GET', 'path': '/api/v1/loras',
+                      'body': '文生图可带 loras: [{id, strength}]，仅 Pony / Anima'},
             'director': {'method': 'POST', 'path': '/api/v1/director', 'body': 'application/json（brief，可选 count）'},
             'text_to_image': {'method': 'POST', 'path': '/api/v1/images',
                               'body': 'application/json'},
@@ -296,6 +304,13 @@ def billing_status() -> dict:
 def people_benchmark():
     from pathlib import Path
     return json.loads(Path(__file__).with_name('people_cases.json').read_text())
+
+
+@router.get('/loras')
+def lora_catalog() -> dict:
+    """可叠加的 LoRA：按底模分（pony / anima），含默认强度、区间、触发词、互斥组与内置预设。"""
+    from .loras import public_catalog
+    return public_catalog()
 
 
 @router.get('/params')
@@ -393,7 +408,8 @@ async def create_image(body: ImageRequest, wait: bool = Query(False),
     built, errors = rules.image_params(body.prompt, body.images, body.size, body.negative,
                                        body.steps, body.cfg, body.sampler,
                                        body.scheduler, body.seed, body.model,
-                                       rating=body.rating)
+                                       rating=body.rating,
+                                       loras=[c.model_dump(exclude_none=True) for c in body.loras or []])
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     job_id, created = _submit(prompt=body.prompt, images=body.images, built=built)

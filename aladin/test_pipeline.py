@@ -171,6 +171,20 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(row['state'], 'pending')
         self.assertIsNone(row['call_id'], 'api 不应提交任务')
 
+    def test_failed_job_is_reset_when_resubmitted(self):
+        """失败的同参数任务不挡路：原地重置为 pending，沿用任务号；未失败的仍然去重。"""
+        job_id = pipeline.enqueue('a teapot', 1, dict(PARAMS))
+        db.update_job(job_id, call_id='fc-old', attempts=2)
+        db.finish_job(job_id, 'failed', 'Planner revision mismatch')
+        again = pipeline.enqueue('a teapot', 1, dict(PARAMS))
+        self.assertEqual(again, job_id)
+        row = db.job(job_id)
+        self.assertEqual((row['state'], row['call_id'], row['attempts'], row['last_error']),
+                         ('pending', None, 0, None))
+        self.assertIn('retry', [e['kind'] for e in db.events(job_id)])
+        with self.assertRaises(Exception):
+            pipeline.enqueue('a teapot', 1, dict(PARAMS))
+
     def test_same_parameters_are_rejected_by_unique_key(self):
         pipeline.enqueue('a teapot', 1, dict(PARAMS))
         with self.assertRaises(Exception):

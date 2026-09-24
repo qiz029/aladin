@@ -255,7 +255,9 @@ def image_context(defaults=None, recent=None):
     from .image_models import MODELS, DEFAULT_MODEL, public_models
     model = (defaults or {}).get('model', DEFAULT_MODEL)
     spec = MODELS[model]
-    return dict(defaults=dict(spec['defaults'], model=model, **{k:v for k,v in (defaults or {}).items() if k != 'model'}),
+    from .loras import public_catalog
+    return dict(lora_catalog=public_catalog(),
+                defaults=dict(spec['defaults'], model=model, **{k:v for k,v in (defaults or {}).items() if k != 'model'}),
                 sizes=spec['sizes'], samplers=spec['samplers'], schedulers=spec['schedulers'],
                 limits=dict(settings.PARAM_LIMITS, steps=spec['steps']), image_models=public_models(),
                 model_hint=spec['hint'], model_label=spec['label'], recent=recent or [])
@@ -273,15 +275,20 @@ def create_job(prompt: str = Form(''), images: int = Form(1), size: str | None =
                cfg: float | None = Form(None), sampler: str | None = Form(None),
                scheduler: str | None = Form(None), seed: str = Form(''),
                model: str = Form('qwen-image-2.1'), negative_provided: bool = Form(False),
-               rating: str | None = Form(None)):
+               rating: str | None = Form(None), loras: str = Form('')):
     if negative_provided and negative is None:
         negative = ''
     seed_value, seed_error = rules.parse_seed(seed)
     if seed_error:
         raise HTTPException(status_code=400, detail=seed_error)
+    try:
+        # 表单把 LoRA 选择序列化成 JSON 放在隐藏字段里；与 API 的 loras 字段同形
+        chosen = json.loads(loras) if loras.strip() else []
+    except ValueError:
+        raise HTTPException(status_code=400, detail='LoRA 选择格式不对') from None
     params, errors = rules.image_params(prompt, images, size, negative, steps,
                                        cfg, sampler, scheduler, seed_value, model,
-                                       rating=rating)
+                                       rating=rating, loras=chosen)
     if errors:
         raise HTTPException(status_code=400, detail='；'.join(errors))
     try:
@@ -559,5 +566,8 @@ def reuse_artifact(request: Request, job_id: str, name: str):
     if size is None:
         raise HTTPException(status_code=422, detail='此图片尺寸不在文生图预设内，请使用原改图入口')
     defaults = dict(spec['defaults'], **{k: v for k, v in params.items() if k != 'size'})
-    defaults.update(size=size, prompt=item['prompt'], seed=item['seed'])
+    # 产物级参数里的 LoRA 只有文件与强度；选择要按任务级记录（带 id）回填
+    defaults.update(size=size, prompt=item['prompt'], seed=item['seed'],
+                    loras=[{'id': l['id'], 'strength': l['strength']}
+                           for l in row['params'].get('loras') or []])
     return TEMPLATES.TemplateResponse(request, 'image.html', image_context(defaults))

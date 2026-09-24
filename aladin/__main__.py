@@ -5,6 +5,8 @@
     python -m aladin          两者同进程，方便本机调试
     python -m aladin cleanup --days 30 [--dry-run]
                               删除 30 天前结束、且没有人工评审的任务及其本地文件
+    python -m aladin loras-sync [--only ID ...] [--dry-run]
+                              把 LoRA 目录下载、校验并上传到 Modal 模型 Volume（本机跑，key 在 .env）
     python -m aladin strip-metadata [--dry-run]
                               去掉已有产物/收藏里内嵌的 workflow 与提示词（一次性）
 
@@ -19,15 +21,24 @@ import threading
 def main() -> None:
     parser = argparse.ArgumentParser(description='aladin')
     parser.add_argument('command', nargs='?', default='all',
-                        choices=['api', 'worker', 'all', 'cleanup', 'strip-metadata'])
+                        choices=['api', 'worker', 'all', 'cleanup', 'strip-metadata', 'loras-sync'])
     parser.add_argument('--host', default='127.0.0.1',
                         help='默认只监听本机；容器里传 0.0.0.0')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--days', type=int, default=30,
                         help='cleanup：清理多少天前结束的任务（图库副本不受影响）')
     parser.add_argument('--dry-run', action='store_true',
-                        help='cleanup / strip-metadata：只列出，不改动')
+                        help='cleanup / strip-metadata / loras-sync：只列出，不改动')
+    parser.add_argument('--only', nargs='+', help='loras-sync：只同步这些 LoRA id')
     args = parser.parse_args()
+
+    if args.command == 'loras-sync':
+        # 只碰 Civitai 与 Modal，不需要数据库
+        from . import lora_sync
+
+        count = lora_sync.sync(args.only, dry_run=args.dry_run)
+        print(f'上传了 {count} 个 LoRA')
+        return
 
     from . import db, pipeline
 

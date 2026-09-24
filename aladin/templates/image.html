@@ -46,6 +46,22 @@
 
 
 
+    <div class="field lora-field" id="loraPanel" hidden>
+      <div class="lora-head">
+        <label>LoRA <span class="small muted" id="loraSummary"></span></label>
+        <span class="spacer"></span>
+        <select id="loraPreset" aria-label="应用预设"><option value="">应用预设…</option></select>
+        <button type="button" class="ghost sm" id="loraSavePreset">存为预设</button>
+        <button type="button" class="ghost sm" id="loraDeletePreset" hidden>删除预设</button>
+        <button type="button" class="ghost sm" id="loraClear">清空</button>
+      </div>
+      <div id="loraList"></div>
+      <p class="small lora-warnings" id="loraWarnings" role="status"></p>
+      <input type="hidden" name="loras" id="lorasInput" value="">
+      <script type="application/json" id="loraCatalog">{{ lora_catalog|tojson }}</script>
+      <script type="application/json" id="loraSelected">{{ (defaults.loras or [])|tojson }}</script>
+    </div>
+
     <details>
       <summary>高级参数</summary>
       <div class="bar-row">
@@ -111,4 +127,5 @@
 {% endif %}
 <script id="image-models" type="application/json">{{ image_models | tojson }}</script>
 <script src="/static/image-models.js" defer></script>
+<script src="/static/lora.js?v=20260924c" defer></script>
 {% endblock %}
