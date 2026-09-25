@@ -20,7 +20,7 @@ FAMILIES = {
     'pony': {'label': 'Pony', 'placement': 'prefix',
              'tags': {'general': ['rating_safe'], 'suggestive': ['rating_questionable'],
                       'explicit': ['rating_explicit']}},
-    'video': {'label': '10Eros-Max 视频', 'placement': 'suffix',
+    'video': {'label': 'LTX 视频', 'placement': 'suffix',
               'tags': {'general': [], 'suggestive': ['sensual', 'suggestive'],
                        'explicit': ['nsfw', 'explicit', 'uncensored']}},
 }

@@ -7,6 +7,10 @@
   const status = document.getElementById('repairStatus');
   const fields = ['left', 'top', 'right', 'bottom'].map(k => document.getElementById('region-' + k));
   let picture, rectangle, start, version = 0;
+  const reuseNode = document.getElementById('reuse-data');
+  const reuse = reuseNode ? JSON.parse(reuseNode.textContent) : null;
+  let restoredRegion = null;
+  let loadingImage = Promise.resolve();
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!picture) return;
@@ -38,8 +42,10 @@
   document.querySelectorAll('[name=mode]').forEach(input => input.addEventListener('change', () => {
     if (input.value !== 'edit') { enabled.checked = false; toggle(); }
   }));
-  file.addEventListener('change', async () => {
+  async function loadPicture() {
     const current = ++version;
+    const regionToRestore = restoredRegion;
+    restoredRegion = null;
     picture = null; setRegion(null);
     if (!file.files[0]) return;
     const url = URL.createObjectURL(file.files[0]);
@@ -50,10 +56,14 @@
       picture = img;
       const scale = Math.min(1, 1000/img.naturalWidth);
       canvas.width = Math.round(img.naturalWidth*scale); canvas.height = Math.round(img.naturalHeight*scale);
+      if (regionToRestore) {
+        enabled.checked = true; toggle(); setRegion(regionToRestore);
+      }
       draw();
     } catch { status.textContent = '无法读取图片，请重新选择 PNG 或 JPEG。'; }
     finally { URL.revokeObjectURL(url); }
-  });
+  }
+  file.addEventListener('change', () => { loadingImage = loadPicture(); });
   function point(e) {
     const r = canvas.getBoundingClientRect();
     return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))];
@@ -84,11 +94,20 @@
     }
   }, true);
   const source = new URLSearchParams(location.search).get('source');
-  if (source && /^\/jobs\/[a-f0-9]{32}\/artifacts\/[\w.-]+\.png$/.test(source)) {
-    enabled.checked = true; toggle();
-    fetch(source).then(r => { if (!r.ok) throw Error(); return r.blob(); }).then(blob => {
+  const input = reuse?.input_url || source;
+  if (input && /^\/jobs\/[a-f0-9]{32}\/(input|artifacts\/[\w.-]+\.png)$/.test(input)) {
+    if (!reuse) { enabled.checked = true; toggle(); }
+    const submit = file.form.querySelector('[type=submit]');
+    submit.disabled = true;
+    status.textContent = '正在载入原始输入图片…';
+    fetch(input).then(r => { if (!r.ok) throw Error(); return r.blob(); }).then(async blob => {
+      if (file.files.length) return; // 用户已手动选图时，不覆盖新选择。
+      restoredRegion = reuse?.settings.region || null;
       const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'source.png', {type:'image/png'}));
       file.files = transfer.files; file.dispatchEvent(new Event('change'));
-    }).catch(() => { status.textContent = '原图加载失败，请手动上传。'; });
+      await loadingImage;
+      if (!enabled.checked) status.textContent = '已载入原始输入图片。';
+    }).catch(() => { status.textContent = '原图加载失败，请手动上传。'; })
+      .finally(() => { submit.disabled = false; });
   }
 })();

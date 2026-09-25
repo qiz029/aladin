@@ -520,3 +520,9 @@ textarea{min-height:140px}
 .manga-slot.rating-explicit{background:#ecdff3}
 .review-rating{width:auto}
 @media (max-width:640px){.manga-review-head{grid-template-columns:1fr}.manga-page{width:140px}}
+
+/* Optional creative requirements stay compact beside the main brief. */
+.director-form .creative-spec{min-width:0;margin:20px 0;padding:18px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface-2)}
+.director-form .creative-spec legend{padding:0 6px;font-size:13px;color:var(--fg)}
+.director-form .creative-spec textarea{min-height:76px;margin:5px 0 14px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:13px;line-height:1.7}
+.director-form .creative-spec textarea:focus{border-color:var(--violet);box-shadow:var(--ring)}

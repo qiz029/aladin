@@ -114,6 +114,7 @@ def validate_request(request: dict) -> dict:
         raise ValueError('无效的结果 key')
     # 目标模型规格（尺寸、边界、默认值、LoRA 说明）由宿主给出；老请求没有它，按 Qwen 处理
     target = contract.validate_target(request.get('target'))
+    contract.creative_spec(request.get('creative_spec'))
     return {'brief': brief.strip(), 'count': count, 'target': target, 'preset': preset, 'rating': rating}
 
 
@@ -229,6 +230,8 @@ def plan(request: dict) -> dict:
         schema = contract.plan_schema(count, target)
         messages = [{'role': 'system', 'content': contract.system_prompt(target)},
                     {'role': 'user', 'content': contract.user_prompt(brief, count)}]
+
+    messages[-1]['content'] += contract.creative_instructions(request.get('creative_spec'))
 
     def harness(parsed: dict) -> tuple[list[dict], dict, list[str]]:
         if manga:

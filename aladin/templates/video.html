@@ -7,6 +7,15 @@
 <div class="panel creator-panel">
   <form data-enhanced method="post" action="/apps/video/jobs" enctype="multipart/form-data">
     <div class="field">
+      <label for="model">模型</label>
+      <select id="model" name="model">
+        {% for key, model in models.items() %}
+        <option value="{{ key }}" {% if key == defaults.model %}selected{% endif %}>{{ model.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="small muted">LTX-2.5 画质与提示词理解更好；LTX-2.3 的 NSFW LoRA 更多。两套各自冷启动。</p>
+    </div>
+    <div class="field">
       <label for="file">起始图（PNG / JPEG，≤ {{ max_mb }} MiB）</label>
       <div class="upload">
         <div class="preview" id="preview">{{ icon("upload") }}</div>
@@ -18,7 +27,7 @@
     </div>
 
     <div class="field">
-      <label for="prompt">提示词（运动与声音，可留空）</label>
+      <label for="prompt">提示词（动作、镜头与声音，可留空）</label>
       <textarea id="prompt" name="prompt" maxlength="2000"
                 placeholder="例如：clouds drift slowly over the peaks, subtle camera push in"></textarea>
     </div>
@@ -51,6 +60,8 @@
     </div>
 
 
+    {{ lora_panel(lora_catalog, defaults.loras) }}
+
     <p class="small muted mt-2">
       生成需要一些时间，提交后无需停留在此页面。
     </p>
@@ -58,56 +69,19 @@
     <details>
       <summary>高级参数</summary>
       <div class="bar-row">
-        <div class="w-xs">
-          <label for="steps">步数</label>
-          <input type="number" id="steps" name="steps" value="{{ defaults.steps }}"
-                 min="{{ limits['steps'][0] }}" max="{{ limits['steps'][1] }}">
-        </div>
-        <div class="w-xs">
-          <label for="cfg">CFG</label>
-          <input type="number" id="cfg" name="cfg" value="{{ defaults.cfg }}" step="0.1"
-                 min="0" max="{{ limits['cfg'][1] }}">
-        </div>
-        <div class="w-xs">
-          <label for="shift">Shift</label>
-          <input type="number" id="shift" name="shift" value="{{ defaults.shift }}" step="0.01"
-                 min="{{ limits['shift'][0] }}" max="{{ limits['shift'][1] }}">
-        </div>
         <div class="w-md">
           <label for="seed">种子（留空随机；复现同一条时填）</label>
           <input type="number" id="seed" name="seed" value="{{ defaults.seed if defaults.seed is not none else '' }}" min="0" placeholder="随机">
         </div>
       </div>
-      <div class="bar-row mt-2">
-        <div class="w-md">
-          <label for="sampler">采样器</label>
-          <select id="sampler" name="sampler">
-            {% for option in samplers %}
-            <option value="{{ option }}" {% if option == defaults.sampler %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="w-md">
-          <label for="scheduler">调度器</label>
-          <select id="scheduler" name="scheduler">
-            {% for option in schedulers %}
-            <option value="{{ option }}" {% if option == defaults.scheduler %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <div class="field mt-2">
-        <label for="negative">负向提示词（可选，CFG 为 1 时不生效）</label>
-        <textarea id="negative" name="negative" maxlength="2000"></textarea>
-      </div>
       <p class="small muted">
-        建议保留默认值：{{ defaults.steps }} 步、CFG 1.0、Shift {{ defaults.shift }}。调整这些参数可能改变生成速度与效果。
+        步数、CFG 与采样器按官方 distilled 模板固定：半分辨率 8 步，放大 2 倍后再精修 3 步，CFG 1。
       </p>
     </details>
     <div class="submit-row"><button type="submit">开始生成 {{ icon("arrow") }}</button><span class="small muted">提交后可在任务历史查看进度</span></div>
   </form>
 </div>
-<aside class="creator-aside"><div class="aside-symbol">{{ icon('video') }}</div><div><h2>先有画面，再有运动</h2><p>上传的图片决定画面内容。提示词可描述动作、镜头，以及环境音或音乐。</p></div><div class="aside-tip"><small>GOOD TO KNOW</small><h2>先试一段短片</h2><p>从 2.3 秒开始探索，找到满意的运动后再尝试更长的视频。冷启动可能需要数分钟。</p></div><div class="model-note">10Eros-Max beta5 Turbo · {{ fps }} fps · 有声 WebM</div></aside>
+<aside class="creator-aside"><div class="aside-symbol">{{ icon('video') }}</div><div><h2>先有画面，再有运动</h2><p>上传的图片决定画面内容。提示词可描述动作、镜头，以及环境音或音乐。</p></div><div class="aside-tip"><small>GOOD TO KNOW</small><h2>先试一段短片</h2><p>从 2 秒开始探索，找到满意的运动后再尝试更长的视频。冷启动可能需要数分钟。</p></div><div class="model-note">LTX-2.5 / LTX-2.3 distilled · {{ fps }} fps · 有声 WebM</div></aside>
 </div>
 
 
@@ -141,4 +115,5 @@
   还没有视频。<a href="/apps/image">先生成一张图</a>，再回来让它动起来。
 </div>
 {% endif %}
+<script src="/static/lora.js?v=20260924e" defer></script>
 {% endblock %}

@@ -38,13 +38,16 @@ _WATCHERS: dict[str, threading.Thread] = {}
 _WATCH_LOCK = threading.Lock()
 
 
-def _target(app: str) -> tuple[str, str, str, str]:
+def _target(app: str, model: str | None = None) -> tuple[str, str, str, str]:
     """app -> (Modal app 名, 函数名, 结果 Volume 名, result.json 里的产物字段)。
 
     两个纵向切片的差异只在这四个值上；提交、轮询、重试、回执的逻辑完全共用。
+    视频每个模型一个 app（model 取自任务请求），产物 Volume 共用。
     """
     if app == 'video':
-        return (settings.APP_VIDEO, settings.FUNCTION_VIDEO,
+        from .video_worker import DEFAULT_MODEL, MODELS
+        spec = MODELS.get(model or DEFAULT_MODEL) or MODELS[DEFAULT_MODEL]
+        return (spec['app'], settings.FUNCTION_VIDEO,
                 settings.VOLUME_RESULTS_VIDEO, 'videos')
     return settings.APP_IMAGE, settings.FUNCTION_IMAGE, settings.VOLUME_RESULTS, 'images'
 
@@ -102,11 +105,12 @@ def enqueue(prompt: str, images: int, params: dict, mode: str = 'txt2img',
         from .params import director_params
         built, errors = director_params(prompt, params.get('count'), params.get('rating'),
                                         params.get('model'), params.get('loras'),
-                                        params.get('review', False), params.get('preset'))
+                                        params.get('review', False), params.get('preset'),
+                                        params.get('creative_spec'))
         if errors:
             raise ValueError('；'.join(errors))
         request = director.build(prompt, built['count'], built['rating'], built['model'],
-                                 built['loras'], built.get('preset'))
+                                 built['loras'], built.get('preset'), built.get('creative_spec'))
         return db.create_job(prompt.strip(), built, request, request['key'], mode='director')
     params = prepare(prompt, params)
     effective = params['prompt_defaults']['effective']
@@ -115,12 +119,9 @@ def enqueue(prompt: str, images: int, params: dict, mode: str = 'txt2img',
     if app == 'video':
         import video_request
         request = video_request.build(
-            effective, input_sha256, negative=params.get('negative', ''),
+            effective, input_sha256, model=params.get('model'),
             width=params['width'], height=params['height'], frames=params['frames'],
-            steps=params['steps'], cfg=params['cfg'], shift=params['shift'],
-            seed=params['seed'], sampler=params['sampler'],
-            scheduler=params['scheduler'],
-            loraStrength=float(params.get('loraStrength', 1.0)))
+            seed=params['seed'], loras=params.get('loras'))
         key = request['key']
     elif mode == 'txt2img' and params.get('model', 'qwen-image-2.1') != 'qwen-image-2.1':
         from .extra_image_request import build as build_extra
@@ -252,7 +253,8 @@ def _submit_one() -> bool:
             return True
         source = path.read_bytes()
     try:
-        target_app, target_function, _volume, _field = _target(row.get('app') or 'image')
+        target_app, target_function, _volume, _field = _target(row.get('app') or 'image',
+                                                               row['request'].get('model'))
         if row['request'].get('modelId'):
             from .image_models import MODELS
             target_app = MODELS[row['request']['modelId']]['app']

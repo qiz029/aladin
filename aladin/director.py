@@ -78,9 +78,9 @@ def _worker_revision(model: str) -> str:
 
 def build(brief: str, count: int | None = None, rating: str | None = None,
           model: str = DEFAULT_MODEL, loras: list[dict] | None = None,
-          preset: str | None = None) -> dict:
+          preset: str | None = None, creative_spec=None) -> dict:
     """规划请求。尺度标签、LoRA 触发词与目标规格都在提交时冻结，规划期间改配置不影响这次任务。"""
-    from .planner_schema import allowed_ratings
+    from .planner_schema import allowed_ratings, creative_spec as validate_spec
     rating = rating or default_rating()
     loras = loras or []
     family = family_for(model)
@@ -91,6 +91,9 @@ def build(brief: str, count: int | None = None, rating: str | None = None,
             'model': model, 'target': target_for(model, loras),
             'loras': [{'id': l['id'], 'version': l['version'], 'strength': l['strength']} for l in loras],
             'loraTriggers': triggers_for(loras)}
+    spec = validate_spec(creative_spec)
+    if spec:
+        body['creative_spec'] = spec
     if preset:
         # 漫画每格的尺度不同：上限以内每一档的标签都在提交时冻结
         body['preset'] = preset

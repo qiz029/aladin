@@ -1,4 +1,8 @@
-"""把目录里的 LoRA 从 Civitai 下载、校验，再上传到对应底模的 Modal 模型 Volume。
+"""把目录里的 LoRA 放进对应底模的 Modal 模型 Volume。
+
+- Civitai 来源：本机下载、校验 sha256，再上传。
+- Hugging Face 来源（视频的 Sulphur、官方 LoRA）：调用该族 Modal app 的 fetch_lora，
+  在容器里直接下载并校验——10GB 级的文件不经本机中转，门控仓库用 app 的 HF secret。
 
 在本机跑（需要 Modal 凭据）：
 
@@ -70,7 +74,8 @@ def sync(only: list[str] | None = None, dry_run: bool = False) -> int:
     unknown = set(only or []) - {item['id'] for item in wanted}
     if unknown:
         raise SystemExit('目录里没有：' + ', '.join(sorted(unknown)))
-    key = None if dry_run else api_key()
+    needs_key = any('civitai_version' in item for item in wanted)
+    key = api_key() if needs_key and not dry_run else None
     uploaded = 0
     for family, volume_name in loras.VOLUME_OF_FAMILY.items():
         items = [item for item in wanted if item['family'] == family]
@@ -84,6 +89,18 @@ def sync(only: list[str] | None = None, dry_run: bool = False) -> int:
         if dry_run or not missing:
             for item in missing:
                 print(f"  将上传 {item['id']:<24} {item['size_mb']:>4} MB  {item['name']}")
+            continue
+        remote = [item for item in missing if 'hf_repo' in item]
+        if remote:
+            fetch = modal.Function.from_name(loras.APP_OF_FAMILY[family], 'fetch_lora')
+            for item in remote:
+                print(f"  容器内下载 {item['id']}（{item['size_mb']} MB）…", end='', flush=True)
+                fetch.remote(item['hf_repo'], item['hf_revision'], item['hf_path'], item['file'],
+                             item['bytes'], item['sha256'])
+                uploaded += 1
+                print(' 已校验', flush=True)
+        missing = [item for item in missing if 'hf_repo' not in item]
+        if not missing:
             continue
         with tempfile.TemporaryDirectory(prefix='aladin-lora-') as temporary:
             for item in missing:

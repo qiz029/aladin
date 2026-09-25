@@ -82,8 +82,7 @@ class PromptDefaultsTest(unittest.TestCase):
             self.assertEqual(saved['request']['prompts'], ['repair, ' + qwen])
             self.assertEqual(saved['request']['negative'], 'blur')
             self.assertEqual(saved['result_key'], request.storage_key_for('repair', 1, built, mode, 'a' * 64))
-        built, errors = params.video_params('', 'blur', 'short', 'landscape', 6, 1, 12, 1,
-                                            'res_multistep', 'simple', 1, rating='general')
+        built, errors = params.video_params('', 'short', 'landscape', 1, rating='general')
         self.assertFalse(errors)
         with patch('aladin.pipeline.db.create_job', return_value='test') as create:
             pipeline.enqueue('', 1, built, 'i2v', input_sha256='b' * 64, app='video')

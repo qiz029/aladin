@@ -1,6 +1,8 @@
-"""Modal 内的 10Eros-Max beta5 Turbo 图生视频工作流。
+"""Modal 内的 LTX 图生视频工作流（LTX-2.3 与 LTX-2.5 两套，各自一个 Modal app）。
 
-使用 ComfyUI 原生 MiniMax-H3 节点，联合生成 24fps 视频和音频。
+图照搬 Comfy-Org/workflow_templates 的 video_ltx2_3_i2v / video_ltx2_5_i2v：
+半分辨率 8 步 → 潜空间 2× 放大 → 3 步精修，视频与音频联合生成，distilled 固定 CFG 1。
+两套的差异（加载器、引导器、采样器、解码分块）都收在 MODELS 里。
 权重和依赖固定版本；WebM 产物保持现有 API/存储契约。
 """
 from __future__ import annotations
@@ -21,46 +23,82 @@ from pathlib import Path
 
 PREFIX = '[aladin-progress]'
 
-# 与 aladin_modal_app.py / aladin/video_worker.py 钉的同一批提交：镜像层共享，
-# 容器会拿这两个值跟自己比对，不一致直接拒绝。
-COMFY_REVISION = 'c194dd00cd42aa18d9dbf27d977bf6b85d9ea565'
-GGUF_REVISION = 'f912d5e5c25921e41eae2c0131eeb4d350e7c165'
+# v0.37.0：LTX-2.5（PR #15499，v0.32.0 起）及其 int8 / Gemma4 修复都在内。
+# 容器会拿它跟请求比对，不一致直接拒绝。
+COMFY_REVISION = '73c9bad4d21e7addbe1d13bc92eee0f1431b017d'
 
-MODEL_REPO = 'TenStrip/10Eros-Max'
-MODEL_REV = '8a198588c8870ab0d613b3492a3150d091c8c2dd'
-SUPPORT_REPO = 'Comfy-Org/MiniMax-H3'
-SUPPORT_REV = '0fea91688aefb62d4eb94d5952f277f46c298284'
-MODEL = '10eros-max-h3-turbo-beta5'
-TRANSFORMER = '10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors'
-MODELS = {MODEL: {
-    'repo': MODEL_REPO, 'revision': MODEL_REV, 'transformer': TRANSFORMER,
-    'encoder': 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
-    'vae': 'minimax_h3_video_vae_fp16.safetensors',
-    'audio_vae': 'minimax_h3_audio_vae_fp32.safetensors',
-    'files': [
-        (MODEL_REPO, MODEL_REV, TRANSFORMER, 'diffusion_models/' + TRANSFORMER, 20970414464),
-        (SUPPORT_REPO, SUPPORT_REV, 'text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
-         'text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors', 15687142551),
-        (SUPPORT_REPO, SUPPORT_REV, 'vae/minimax_h3_video_vae_fp16.safetensors',
-         'vae/minimax_h3_video_vae_fp16.safetensors', 5207808496),
-        (SUPPORT_REPO, SUPPORT_REV, 'vae/minimax_h3_audio_vae_fp32.safetensors',
-         'vae/minimax_h3_audio_vae_fp32.safetensors', 605254808),
-    ],
-}}
-SAMPLERS = ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_2m_sde', 'uni_pc',
-            'res_multistep', 'er_sde', 'lcm']
-SCHEDULERS = ['simple', 'normal', 'beta']
+LTX23_REV = '1d756cd27fa11c0896c4dfee093cd1bf36c7f7a1'      # Lightricks/LTX-2.3-fp8
+LTX23_UPSCALER_REV = '5948be4ced3a4493d1f836df64378ff136ddb770'   # Lightricks/LTX-2.3
+COMFY_LTX23_REV = 'f20f3a54378001e5e6d642acc84719cc78addf4b'      # Comfy-Org/ltx-2.3
+COMFY_LTX2_REV = 'ccde4ba417d7900669fd56dd292a883cee11ff37'       # Comfy-Org/ltx-2
+LTX25_REV = '5e6e71018ee1756ed329b697a7b4aedc934dfce9'      # Lightricks/LTX-2.5（需同意协议）
+
+# 模板默认的负向提示词；distilled 固定 CFG 1 时它不参与采样，但引导器需要这路条件。
+NEGATIVE = 'pc game, console game, video game, cartoon, childish, ugly'
+STAGE1_SIGMAS = '1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0'
+STAGE2_SIGMAS = '0.85, 0.7250, 0.4219, 0.0'
+
+MODELS = {
+    'ltx-2.3': {
+        'label': 'LTX-2.3', 'app': 'aladin-video-ltx23-v1', 'volume': 'aladin-ltx23-models-v1',
+        'repo': 'Lightricks/LTX-2.3-fp8', 'revision': LTX23_REV,
+        'checkpoint': 'ltx-2.3-22b-dev-fp8.safetensors',
+        'text_encoder': 'gemma_3_12B_it_fp4_mixed.safetensors',
+        'distill_lora': 'ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors',
+        'upscaler': 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
+        'sampler': 'euler', 'decode': (768, 64, 4096, 4), 'gated': False,
+        'files': [
+            ('Lightricks/LTX-2.3-fp8', LTX23_REV, 'ltx-2.3-22b-dev-fp8.safetensors',
+             'checkpoints/ltx-2.3-22b-dev-fp8.safetensors', 29145431166),
+            ('Comfy-Org/ltx-2', COMFY_LTX2_REV, 'split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors',
+             'text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', 9447702218),
+            ('Comfy-Org/ltx-2.3', COMFY_LTX23_REV,
+             'split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors',
+             'loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors', 2741024390),
+            ('Lightricks/LTX-2.3', LTX23_UPSCALER_REV, 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
+             'latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors', 995743560),
+        ],
+    },
+    'ltx-2.5': {
+        'label': 'LTX-2.5', 'app': 'aladin-video-ltx25-v1', 'volume': 'aladin-ltx25-models-v1',
+        'repo': 'Lightricks/LTX-2.5', 'revision': LTX25_REV,
+        'transformer': 'ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors',
+        'text_encoder': 'gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors',
+        'vae': 'ltx-2.5-video-vae-bf16.safetensors', 'audio_vae': 'ltx-2.5-audio-vae-bf16.safetensors',
+        'upscaler': 'ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors',
+        'sampler': 'euler_ancestral', 'decode': (512, 64, 64, 16), 'gated': True,
+        'files': [
+            ('Lightricks/LTX-2.5', LTX25_REV,
+             'diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors',
+             'diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors', 21504034224),
+            ('Lightricks/LTX-2.5', LTX25_REV,
+             'text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors',
+             'text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors', 15372969374),
+            ('Lightricks/LTX-2.5', LTX25_REV, 'vae/ltx-2.5-video-vae-bf16.safetensors',
+             'vae/ltx-2.5-video-vae-bf16.safetensors', 1472223346),
+            ('Lightricks/LTX-2.5', LTX25_REV, 'vae/ltx-2.5-audio-vae-bf16.safetensors',
+             'vae/ltx-2.5-audio-vae-bf16.safetensors', 364866540),
+            ('Lightricks/LTX-2.5', LTX25_REV,
+             'latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors',
+             'latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors', 995778752),
+        ],
+    },
+}
+DEFAULT_MODEL = 'ltx-2.5'
+# 容器里由部署时的环境变量决定本 app 跑哪一套；宿主侧不设，按请求里的 model 选。
+MODEL = os.environ.get('ALADIN_VIDEO_MODEL', DEFAULT_MODEL)
+
 MAX_PROMPT = 2000
-MIN_FRAMES, MAX_FRAMES = 22, 192
+MIN_FRAMES, MAX_FRAMES = 9, 257     # 8n+1
 FPS = 24
-SIZE_MIN, SIZE_MAX, SIZE_STEP = 256, 1344, 32
-STEPS_MAX = 40
+# 第一段在半分辨率上采样，所以最终宽高要是 64 的倍数（半分辨率仍是 32 的倍数）
+SIZE_MIN, SIZE_MAX, SIZE_STEP = 256, 1920, 64
 MAX_VIDEO = 192 * 1024 * 1024
-WEIGHT_MANIFEST = 'weights-h3.json'
-ROOT = Path('/models/h3')
-# Turbo delta 已包含在 checkpoint 中，不能叠加旧 Wan lightx2v LoRA。
-DEFAULTS = {'steps': 6, 'cfg': 1.0, 'shift': 12.0, 'width': 832, 'height': 480,
-            'frames': 124, 'seed': 0, 'sampler': 'res_multistep', 'scheduler': 'simple'}
+MAX_LORAS = 6
+LORA_FILE = re.compile(r'^(civitai-\d+|hf-[0-9a-f]{16})\.safetensors$')
+WEIGHT_MANIFEST = 'weights.json'
+ROOT = Path('/models')
+DEFAULTS = {'width': 1024, 'height': 576, 'frames': 121, 'seed': 0}
 
 
 def revision() -> str:
@@ -92,9 +130,8 @@ def atomic_json(path: Path, value) -> None:
 # --- 采样进度观察 ----------------------------------------------------------
 
 def classify(graph: dict) -> dict:
-    """单个 H3 联合音视频采样器的进度。"""
-    return {node_id: (1, 1) for node_id, spec in graph.items()
-            if spec.get('class_type') == 'SamplerCustomAdvanced'}
+    """两段采样各报一次进度：第一段 8 步生成，第二段 3 步精修。"""
+    return {'sample1': (1, 2), 'sample2': (2, 2)}
 
 
 def ws_url(server_url: str) -> str:
@@ -191,7 +228,25 @@ def watch_async(server_url: str, prompt_id: str, mapping: dict,
 
 # --- 请求校验与工作流 ------------------------------------------------------
 
-def validate(request: dict) -> dict:
+def validate_loras(loras) -> None:
+    """容器只认白名单形状：固定命名的文件、64 位 sha256、有限的强度。目录与名称在宿主侧。"""
+    if not isinstance(loras, list) or len(loras) > MAX_LORAS:
+        raise ValueError('Invalid LoRA list')
+    for item in loras:
+        if not isinstance(item, dict) or set(item) != {'file', 'sha256', 'strength'}:
+            raise ValueError('Invalid LoRA entry')
+        if not isinstance(item['file'], str) or not LORA_FILE.match(item['file']):
+            raise ValueError('Invalid LoRA file name')
+        if not isinstance(item['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', item['sha256']):
+            raise ValueError('Invalid LoRA checksum')
+        strength = item['strength']
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)) \
+                or not math.isfinite(strength) or not -10 <= strength <= 10:
+            raise ValueError('Invalid LoRA strength')
+
+
+def validate(request: dict, model: str | None = None) -> dict:
+    """model：本容器部署的那一套；宿主侧（测试）不传，只验请求自洽。"""
     if not isinstance(request, dict):
         raise ValueError('Request must be an object')
     if request.get('workerRevision') != revision():
@@ -202,148 +257,258 @@ def validate(request: dict) -> dict:
     spec = MODELS.get(request.get('model'))
     if spec is None:
         raise ValueError('Unsupported model: ' + str(request.get('model')))
+    if model is not None and request['model'] != model:
+        raise ValueError('This app serves ' + model + ', not ' + str(request['model']))
     if request.get('modelRevision') != spec['revision']:
         raise ValueError('Pinned model revision mismatch')
-    if request.get('comfyRevision') != COMFY_REVISION or request.get('ggufRevision') != GGUF_REVISION:
-        raise ValueError('Pinned ComfyUI/GGUF revision mismatch')
+    if request.get('comfyRevision') != COMFY_REVISION:
+        raise ValueError('Pinned ComfyUI revision mismatch')
     if not re.fullmatch('[a-f0-9]{64}', str(request.get('key', ''))):
         raise ValueError('Invalid key')
     prompt = request.get('prompt', '')
     # 图生视频允许空提示词：输入图本身已经承载了内容，提示词只描述想要的运动。
     if not isinstance(prompt, str) or len(prompt) > MAX_PROMPT:
         raise ValueError('Prompt bounds')
-    negative = request.get('negative', '')
-    if not isinstance(negative, str) or len(negative) > MAX_PROMPT:
-        raise ValueError('Negative prompt bounds')
     for field in ('width', 'height'):
         value = request.get(field)
         if type(value) is not int or not SIZE_MIN <= value <= SIZE_MAX or value % SIZE_STEP:
             raise ValueError(field + ' bounds')
     frames = request.get('frames')
-    if type(frames) is not int or not MIN_FRAMES <= frames <= MAX_FRAMES or (frames - 5) % 17:
+    if type(frames) is not int or not MIN_FRAMES <= frames <= MAX_FRAMES or (frames - 1) % 8:
         raise ValueError('Frame count bounds')
     seed = request.get('seed')
     if type(seed) is not int or not 0 <= seed < 2 ** 63 - 1:
         raise ValueError('Seed bounds')
-    steps = request.get('steps')
-    if type(steps) is not int or not 1 <= steps <= STEPS_MAX:
-        raise ValueError('Steps bounds')
-    cfg = request.get('cfg')
-    if type(cfg) not in (int, float) or not math.isfinite(cfg) or not 0 <= cfg <= 10:
-        raise ValueError('CFG bounds')
-    shift = request.get('shift')
-    if type(shift) not in (int, float) or not math.isfinite(shift) or not 0.01 <= shift <= 20:
-        raise ValueError('Shift bounds')
-    strength = request.get('loraStrength', 1.0)
-    if type(strength) not in (int, float) or strength != 1.0:
-        raise ValueError('10Eros-Max Turbo has baked-in acceleration; loraStrength must remain 1')
-    if request.get('sampler') not in SAMPLERS:
-        raise ValueError('Unsupported sampler')
-    if request.get('scheduler') not in SCHEDULERS:
-        raise ValueError('Unsupported scheduler')
+    validate_loras(request.get('loras', []))
     if not re.fullmatch('[a-f0-9]{64}', str(request.get('inputSha256', ''))):
         raise ValueError('Input image hash required')
     return request
 
 
-def workflow(request: dict) -> dict:
-    """原生 H3 图像条件、联合音视频采样与解码；默认 CFG=1 使用 BasicGuider。"""
-    spec = MODELS[request['model']]
-    graph = {
+def _loaders(spec: dict) -> dict:
+    """各版本的加载器。统一出口：model / clip / audio_vae 节点名；VAE 见 _vae()。"""
+    if 'checkpoint' in spec:          # LTX-2.3：单文件 checkpoint，dev 模型 + 0.5 distilled LoRA
+        return {
+            'checkpoint': {'class_type': 'CheckpointLoaderSimple', 'inputs': {
+                'ckpt_name': spec['checkpoint']}},
+            'clip': {'class_type': 'LTXAVTextEncoderLoader', 'inputs': {
+                'text_encoder': spec['text_encoder'], 'ckpt_name': spec['checkpoint'],
+                'device': 'default'}},
+            'audio_vae': {'class_type': 'LTXVAudioVAELoader', 'inputs': {
+                'ckpt_name': spec['checkpoint']}},
+            'model': {'class_type': 'LoraLoaderModelOnly', 'inputs': {
+                'model': ['checkpoint', 0], 'lora_name': spec['distill_lora'],
+                'strength_model': 0.5}},
+        }
+    return {
         'model': {'class_type': 'UNETLoader', 'inputs': {
             'unet_name': spec['transformer'], 'weight_dtype': 'default'}},
-        'shift': {'class_type': 'MiniMaxH3SigmaShift', 'inputs': {
-            'model': ['model', 0], 'shift_video': request['shift'], 'shift_audio': 3.0}},
-        'input': {'class_type': 'LoadImage', 'inputs': {'image': request['inputName']}},
-        'encoder': {'class_type': 'CLIPLoader', 'inputs': {
-            'clip_name': spec['encoder'], 'type': 'minimax', 'device': 'default'}},
+        'clip': {'class_type': 'CLIPLoader', 'inputs': {
+            'clip_name': spec['text_encoder'], 'type': 'ltxv', 'device': 'default'}},
         'vae': {'class_type': 'VAELoader', 'inputs': {'vae_name': spec['vae']}},
         'audio_vae': {'class_type': 'VAELoader', 'inputs': {'vae_name': spec['audio_vae']}},
-        'conditioning': {'class_type': 'MiniMaxH3ImageToVideo', 'inputs': {
-            'clip': ['encoder', 0], 'vae': ['vae', 0], 'prompt': request['prompt'],
-            'width': request['width'], 'height': request['height'],
-            'length': request['frames'], 'first_frame': ['input', 0]}},
-        'guider': {'class_type': 'BasicGuider', 'inputs': {
-            'model': ['shift', 0], 'conditioning': ['conditioning', 0]}},
-        'noise': {'class_type': 'RandomNoise', 'inputs': {'noise_seed': request['seed']}},
-        'sampler': {'class_type': 'KSamplerSelect', 'inputs': {'sampler_name': request['sampler']}},
-        'sigmas': {'class_type': 'BasicScheduler', 'inputs': {
-            'model': ['shift', 0], 'scheduler': request['scheduler'],
-            'steps': request['steps'], 'denoise': 1.0}},
-        'sample': {'class_type': 'SamplerCustomAdvanced', 'inputs': {
-            'noise': ['noise', 0], 'guider': ['guider', 0], 'sampler': ['sampler', 0],
-            'sigmas': ['sigmas', 0], 'latent_image': ['conditioning', 1]}},
-        'decode': {'class_type': 'VAEDecode', 'inputs': {'samples': ['sample', 0], 'vae': ['vae', 0]}},
-        'decode_audio': {'class_type': 'VAEDecodeAudio', 'inputs': {
-            'samples': ['sample', 0], 'vae': ['audio_vae', 0]}},
+    }
+
+
+def _vae(spec: dict) -> list:
+    return ['checkpoint', 2] if 'checkpoint' in spec else ['vae', 0]
+
+
+def _guider(spec: dict, model, positive, negative) -> dict:
+    if 'checkpoint' in spec:
+        return {'class_type': 'CFGGuider', 'inputs': {
+            'model': model, 'positive': positive, 'negative': negative, 'cfg': 1.0}}
+    return {'class_type': 'LTXVDualCFGGuider', 'inputs': {
+        'model': model, 'positive': positive, 'negative': negative,
+        'video_cfg': 1.0, 'audio_cfg': 1.0}}
+
+
+def workflow(request: dict) -> dict:
+    """两段式图生视频 + 联合音频，逐节点对应官方模板（见模块文档）。"""
+    spec = MODELS[request['model']]
+    width, height, frames, fps = request['width'], request['height'], request['frames'], FPS
+    graph = _loaders(spec)
+    # 用户 LoRA 串在底模之后；两段采样共用同一个打过补丁的模型。节点号用 lora_ 前缀。
+    model = ['model', 0]
+    for index, item in enumerate(request.get('loras', [])):
+        node = f'lora_{index}'
+        graph[node] = {'class_type': 'LoraLoaderModelOnly', 'inputs': {
+            'model': model, 'lora_name': item['file'], 'strength_model': item['strength']}}
+        model = [node, 0]
+    vae, audio_vae = _vae(spec), ['audio_vae', 0]
+    if 'checkpoint' in spec:
+        # 2.3 模板先按目标尺寸居中裁切，再把长边缩到 1536
+        crop = {'class_type': 'ResizeImageMaskNode', 'inputs': {
+            'input': ['input', 0], 'resize_type': 'scale dimensions',
+            'resize_type.width': width, 'resize_type.height': height,
+            'resize_type.crop': 'center', 'scale_method': 'lanczos'}}
+        graph['crop'] = crop
+        resize_source, resize_method = ['crop', 0], 'area'
+    else:
+        resize_source, resize_method = ['input', 0], 'lanczos'
+    graph.update({
+        'input': {'class_type': 'LoadImage', 'inputs': {'image': request['inputName']}},
+        'resize': {'class_type': 'ResizeImageMaskNode', 'inputs': {
+            'input': resize_source, 'resize_type': 'scale longer dimension',
+            'resize_type.longer_size': 1536, 'scale_method': resize_method}},
+        'preprocess': {'class_type': 'LTXVPreprocess', 'inputs': {
+            'image': ['resize', 0], 'img_compression': 18}},
+        'positive': {'class_type': 'CLIPTextEncode', 'inputs': {
+            'clip': ['clip', 0], 'text': request['prompt']}},
+        'negative': {'class_type': 'CLIPTextEncode', 'inputs': {
+            'clip': ['clip', 0], 'text': NEGATIVE}},
+        'conditioning': {'class_type': 'LTXVConditioning', 'inputs': {
+            'positive': ['positive', 0], 'negative': ['negative', 0], 'frame_rate': float(fps)}},
+        # 第一段：半分辨率，首帧以 0.7 强度注入
+        'latent': {'class_type': 'EmptyLTXVLatentVideo', 'inputs': {
+            'width': width // 2, 'height': height // 2, 'length': frames, 'batch_size': 1}},
+        'first_frame1': {'class_type': 'LTXVImgToVideoInplace', 'inputs': {
+            'vae': vae, 'image': ['preprocess', 0], 'latent': ['latent', 0],
+            'strength': 0.7, 'bypass': False}},
+        'audio_latent': {'class_type': 'LTXVEmptyLatentAudio', 'inputs': {
+            'audio_vae': audio_vae, 'frames_number': frames, 'frame_rate': fps,
+            'batch_size': 1}},
+        'av1': {'class_type': 'LTXVConcatAVLatent', 'inputs': {
+            'video_latent': ['first_frame1', 0], 'audio_latent': ['audio_latent', 0]}},
+        'noise1': {'class_type': 'RandomNoise', 'inputs': {'noise_seed': request['seed']}},
+        'sampler1': {'class_type': 'KSamplerSelect', 'inputs': {'sampler_name': spec['sampler']}},
+        'sigmas1': {'class_type': 'ManualSigmas', 'inputs': {'sigmas': STAGE1_SIGMAS}},
+        'guider1': _guider(spec, model, ['conditioning', 0], ['conditioning', 1]),
+        'sample1': {'class_type': 'SamplerCustomAdvanced', 'inputs': {
+            'noise': ['noise1', 0], 'guider': ['guider1', 0], 'sampler': ['sampler1', 0],
+            'sigmas': ['sigmas1', 0], 'latent_image': ['av1', 0]}},
+        'split1': {'class_type': 'LTXVSeparateAVLatent', 'inputs': {'av_latent': ['sample1', 0]}},
+        # 第二段：潜空间 2× 放大，首帧以 1.0 强度再注入，3 步精修
+        'upscaler': {'class_type': 'LatentUpscaleModelLoader', 'inputs': {
+            'model_name': spec['upscaler']}},
+        'upscale': {'class_type': 'LTXVLatentUpsampler', 'inputs': {
+            'samples': ['split1', 0], 'upscale_model': ['upscaler', 0], 'vae': vae}},
+        'first_frame2': {'class_type': 'LTXVImgToVideoInplace', 'inputs': {
+            'vae': vae, 'image': ['preprocess', 0], 'latent': ['upscale', 0],
+            'strength': 1.0, 'bypass': False}},
+        'av2': {'class_type': 'LTXVConcatAVLatent', 'inputs': {
+            'video_latent': ['first_frame2', 0], 'audio_latent': ['split1', 1]}},
+        'noise2': {'class_type': 'RandomNoise', 'inputs': {'noise_seed': 42}},
+        'sampler2': {'class_type': 'KSamplerSelect', 'inputs': {'sampler_name': spec['sampler']}},
+        'sigmas2': {'class_type': 'ManualSigmas', 'inputs': {'sigmas': STAGE2_SIGMAS}},
+        'guider2': _guider(spec, model, ['conditioning', 0], ['conditioning', 1]),
+        'sample2': {'class_type': 'SamplerCustomAdvanced', 'inputs': {
+            'noise': ['noise2', 0], 'guider': ['guider2', 0], 'sampler': ['sampler2', 0],
+            'sigmas': ['sigmas2', 0], 'latent_image': ['av2', 0]}},
+        'split2': {'class_type': 'LTXVSeparateAVLatent', 'inputs': {'av_latent': ['sample2', 0]}},
+        'decode': {'class_type': 'VAEDecodeTiled', 'inputs': dict(
+            zip(('tile_size', 'overlap', 'temporal_size', 'temporal_overlap'), spec['decode']),
+            samples=['split2', 0], vae=vae)},
+        'decode_audio': {'class_type': 'LTXVAudioVAEDecode', 'inputs': {
+            'samples': ['split2', 1], 'audio_vae': audio_vae}},
         'video': {'class_type': 'CreateVideo', 'inputs': {
-            'images': ['decode', 0], 'audio': ['decode_audio', 0], 'fps': float(FPS)}},
+            'images': ['decode', 0], 'audio': ['decode_audio', 0], 'fps': float(fps)}},
         'save': {'class_type': 'SaveVideo', 'inputs': {
             'video': ['video', 0], 'filename_prefix': 'aladin-' + request['key'][:12],
             'format': 'mp4', 'format.codec': 'h264'}},
-    }
-    if request['cfg'] != 1.0:
-        graph['negative'] = {'class_type': 'MiniMaxH3ImageToVideo', 'inputs':
-                             dict(graph['conditioning']['inputs'], prompt=request['negative'])}
-        graph['guider'] = {'class_type': 'CFGGuider', 'inputs': {
-            'model': ['shift', 0], 'positive': ['conditioning', 0],
-            'negative': ['negative', 0], 'cfg': request['cfg']}}
+    })
+    if 'checkpoint' in spec:
+        # 2.3 模板：第二段的条件要裁掉第一段注入的首帧引导
+        graph['crop_guides'] = {'class_type': 'LTXVCropGuides', 'inputs': {
+            'positive': ['conditioning', 0], 'negative': ['conditioning', 1],
+            'latent': ['split1', 0]}}
+        graph['guider2'] = _guider(spec, model, ['crop_guides', 0], ['crop_guides', 1])
     return graph
 
 
 # --- 权重 ------------------------------------------------------------------
 
-def cached(manifest: dict, root: Path) -> bool:
-    if manifest.get('model') != MODEL or manifest.get('revision') != MODEL_REV:
+def cached(manifest: dict, model: str, root: Path) -> bool:
+    spec = MODELS[model]
+    if manifest.get('model') != model or manifest.get('revision') != spec['revision']:
         return False
     # 按当前钉版验，而不是按 manifest 里记的那套：换量化后旧文件还在，
     # 用旧清单判会一直命中、新权重永远下不下来（生图那边实测踩过）。
-    for _repo, _revision, _hub, local, size in MODELS[MODEL]['files']:
+    for _repo, _revision, _hub, local, size in spec['files']:
         path = root / local
         if not path.is_file() or path.stat().st_size != size:
             return False
     return True
 
 
-def ensure_weights(root: Path = ROOT) -> dict:
+def _download(repo: str, revision: str, hub: str, target: Path, size: int) -> None:
+    import shutil
+    from huggingface_hub import hf_hub_download
+    say(f'downloading {repo}/{hub} ({size / 1e9:.2f} GB)')
+    staging = target.parent.parent / '.hf-staging'
+    downloaded = Path(hf_hub_download(repo_id=repo, filename=hub, revision=revision,
+                                      local_dir=str(staging)))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(downloaded), str(target))
+    if target.stat().st_size != size:
+        raise ValueError('Downloaded weight size mismatch: ' + hub)
+
+
+def ensure_weights(model: str = MODEL, root: Path = ROOT) -> dict:
     """确保全套权重在本地，返回 manifest。仓库内路径带前缀，下载后统一归位。"""
     manifest_path = root / WEIGHT_MANIFEST
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-    if cached(manifest, root):
-        say('weight cache hit for ' + MODEL)
+    if cached(manifest, model, root):
+        say('weight cache hit for ' + model)
         return manifest
-    import shutil
-    from huggingface_hub import hf_hub_download
+    spec = MODELS[model]
     root.mkdir(parents=True, exist_ok=True)
     files = []
-    for repo, revision, hub, local, size in MODELS[MODEL]['files']:
+    for repo, revision_, hub, local, size in spec['files']:
         target = root / local
-        if target.is_file() and target.stat().st_size == size:
-            files.append({'hub': hub, 'path': local, 'bytes': size})
-            continue
-        say(f'downloading {hub} ({size / 1e9:.2f} GB)')
-        downloaded = Path(hf_hub_download(repo_id=repo, filename=hub, revision=revision,
-                                          local_dir=str(root)))
-        if downloaded.resolve() != target.resolve():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(downloaded), str(target))
-        if target.stat().st_size != size:
-            raise ValueError('Downloaded weight size mismatch: ' + hub)
-        files.append({'hub': hub, 'path': local, 'bytes': target.stat().st_size})
-    manifest = {'model': MODEL, 'repo': MODELS[MODEL]['repo'],
-                'revision': MODELS[MODEL]['revision'], 'comfyRevision': COMFY_REVISION,
-                'ggufNode': GGUF_REVISION, 'files': files,
+        if not (target.is_file() and target.stat().st_size == size):
+            _download(repo, revision_, hub, target, size)
+        files.append({'hub': hub, 'path': local, 'bytes': size})
+    manifest = {'model': model, 'repo': spec['repo'], 'revision': spec['revision'],
+                'comfyRevision': COMFY_REVISION, 'files': files,
                 'verifiedAt': round(time.time(), 3)}
     atomic_json(manifest_path, manifest)
     return manifest
 
 
+def fetch_lora(repo: str, revision_: str, hub: str, file: str, size: int, sha256: str,
+               root: Path = ROOT) -> dict:
+    """HF 上的 LoRA 直接在容器里下载进 Volume（大文件不经本机中转）；Civitai 的走本机 loras-sync。"""
+    if not LORA_FILE.match(file):
+        raise ValueError('Invalid LoRA file name')
+    target = root / 'loras' / file
+    if not (target.is_file() and target.stat().st_size == size):
+        _download(repo, revision_, hub, target, size)
+    with target.open('rb') as handle:
+        actual = hashlib.file_digest(handle, 'sha256').hexdigest()
+    if actual != sha256:
+        target.unlink()
+        raise ValueError('LoRA checksum mismatch: ' + hub)
+    atomic_json(target.with_suffix('.verified.json'), {'size': size, 'sha256': sha256})
+    return {'file': file, 'bytes': size}
+
+
+def ensure_loras(loras, root: Path = ROOT) -> None:
+    """LoRA 由宿主侧的 loras-sync 预先放进模型 Volume；这里只核对，不下载。
+
+    校验结果记在旁边的标记文件里：大文件每次都算 sha256 太慢，而 Volume 上的文件不会被改写。
+    """
+    for item in loras:
+        target = root / 'loras' / item['file']
+        if not target.is_file():
+            raise ValueError('LoRA not synced to volume: ' + item['file'] +
+                             '（先运行 python -m aladin loras-sync）')
+        marker = target.with_suffix('.verified.json')
+        stamp = {'size': target.stat().st_size, 'sha256': item['sha256']}
+        if marker.exists() and json.loads(marker.read_text()) == stamp:
+            continue
+        with target.open('rb') as handle:
+            actual = hashlib.file_digest(handle, 'sha256').hexdigest()
+        if actual != item['sha256']:
+            raise ValueError('LoRA checksum mismatch: ' + item['file'])
+        atomic_json(marker, stamp)
+
+
 def extra_model_paths(root: Path) -> Path:
     path = Path('/tmp/extra_model_paths.yaml')
-    path.write_text('aladin:\n    base_path: ' + str(root) +
-                    '\n    diffusion_models: diffusion_models'
-                    '\n    text_encoders: text_encoders\n    vae: vae'
-                    '\n    loras: loras\n')
+    path.write_text('aladin:\n    base_path: ' + str(root) + '\n' + ''.join(
+        f'    {name}: {name}\n' for name in ('checkpoints', 'diffusion_models', 'text_encoders',
+                                            'vae', 'loras', 'latent_upscale_models')))
     return path
 
 
@@ -376,6 +541,14 @@ def tail(path: str, lines: int) -> list:
         return Path(path).read_text(errors='replace').splitlines()[-lines:]
     except FileNotFoundError:
         return []
+
+
+def lora_warnings(path: str, limit: int = 20) -> list:
+    try:
+        lines = Path(path).read_text(errors='replace').splitlines()
+    except FileNotFoundError:
+        return []
+    return [line for line in lines if 'lora key not loaded' in line.lower()][:limit]
 
 
 def submit(graph: dict, client_id: str, prompt_id: str) -> str:
@@ -465,10 +638,11 @@ SERVER = 'http://127.0.0.1:8188'
 
 
 def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
-    request = validate(json.loads(json.dumps(request)))
+    request = validate(json.loads(json.dumps(request)), MODEL)
     started = time.time()
     spec = MODELS[request['model']]
-    ensure_weights(ROOT)
+    ensure_weights(request['model'], ROOT)
+    ensure_loras(request.get('loras', []), ROOT)
     output = Path(result_root) / request['key']
     output.mkdir(parents=True, exist_ok=True)
     # 文件名由哈希决定，每次运行一致。必须在回执比对之前算好：它会被写进
@@ -509,11 +683,14 @@ def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
         temporary.replace(output / name)
         elapsed = round(time.time() - started, 2)
         record = {'schemaVersion': 1, 'request': request, 'model': spec['repo'],
-                  'elapsedSeconds': elapsed, 'quantization': spec['transformer'],
+                  'elapsedSeconds': elapsed,
+                  'weights': [item[3] for item in spec['files']],
                   'videos': [{'index': 1, 'file': name, 'sha256': digest(data),
                               'bytes': len(data), 'format': 'webm', 'fps': FPS,
                               'frames': request['frames'],
                               'prompt': request['prompt'], 'seed': request['seed']}],
+                  # LoRA 键对不上时 ComfyUI 只打警告不报错（2.3 的 LoRA 用在 2.5 上尤其要看这里）
+                  'loraWarnings': lora_warnings('/tmp/comfy-server.log'),
                   'serverLogTail': tail('/tmp/comfy-server.log', 8)}
         atomic_json(output / 'result.json', record)
         progress({'kind': 'encoded', 'bytes': len(data), 'seconds': elapsed})

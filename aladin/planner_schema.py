@@ -20,6 +20,36 @@ MIN_IMAGES, MAX_IMAGES = 1, 8
 MAX_BRIEF_CHARS = 4000
 SEED_MAX = 2 ** 31 - 1
 
+CREATIVE_FIELDS = {'must_keep': '必须保持', 'may_change': '允许变化', 'change_only': '本轮只改'}
+CREATIVE_FIELD_LIMIT = 1000
+
+
+def creative_spec(value=None) -> dict[str, str]:
+    """共享的创作要求校验；空字段不存，不改变旧请求。"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or set(value) - CREATIVE_FIELDS.keys():
+        raise ValueError('创作要求只能包含 must_keep / may_change / change_only')
+    result = {}
+    for key, text in value.items():
+        if not isinstance(text, str) or len(text) > CREATIVE_FIELD_LIMIT:
+            raise ValueError(f'{CREATIVE_FIELDS[key]}必须是最多 {CREATIVE_FIELD_LIMIT} 字符的文本')
+        if text.strip():
+            result[key] = text.strip()
+    return result
+
+
+def creative_instructions(value=None) -> str:
+    spec = creative_spec(value)
+    if not spec:
+        return ''
+    lines = '\n'.join(f'{CREATIVE_FIELDS[key]}：{text}' for key, text in spec.items())
+    return ('\n\n创作要求（适用于每张图）：\n' + lines +
+            '\n把必须保持的内容具体写进每张提示词；允许变化不是必须变化。'
+            '本轮只改有内容时，仅在它指定的范围内变化，其余保持需求中的设定。'
+            '必须保持优先于允许变化；存在冲突时在 rationale 中指出，不要静默改写。'
+            '每张的 rationale 简要说明如何落实这些要求。不要为了让候选有差异而改动固定项。')
+
 # 每个模型的「方言」：提示词写法与负向词的作用。数值边界不写在这里——从目标规格里生成，
 # 这样改尺寸 / 步数上限只需改一处。
 DIALECTS = {

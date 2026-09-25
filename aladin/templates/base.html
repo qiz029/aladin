@@ -15,8 +15,8 @@
 (() => { let on = true; try { on = localStorage.getItem('aladin.privacy') !== 'off'; } catch (e) {}
   if (on) document.documentElement.dataset.privacy = 'blur'; })();
 </script>
-<link rel="stylesheet" href="/static/studio.css?v=20260924b">
-<script src="/static/studio.js?v=20260924d" defer></script>
+<link rel="stylesheet" href="/static/studio.css?v=20260924e">
+<script src="/static/studio.js?v=20260924e" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
@@ -50,6 +50,7 @@
   <div class="lightbox-bar">
     <span class="lightbox-title" id="lightboxTitle"></span><span class="spacer"></span>
     <a class="btn btn-ghost sm" id="lightboxJob" href="#" hidden>任务页</a>
+    <a class="btn btn-ghost sm" id="lightboxReuse" href="#" hidden>用相同设置创作</a>
     <a class="btn btn-ghost sm" id="lightboxDownload" href="#" download>下载</a>
     <button class="btn-ghost sm" id="lightboxClose" type="button" data-lightbox-close>关闭 {{ icon('close') }}</button>
   </div>

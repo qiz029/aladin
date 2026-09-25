@@ -40,6 +40,7 @@ class DirectorRequest(BaseModel):
     loras: list['LoraChoice'] | None = Field(None, description='整批共用的 LoRA（仅 Pony / Anima）')
     review: bool = Field(False, description='true：规划完停在 review，调用 /jobs/{id}/approve 确认后才生成')
     preset: Literal['manga'] | None = Field(None, description='预设：manga = 日式漫画一页多格（count 为格数 4–8，默认 6）')
+    creative_spec: dict | None = Field(None, description='创作要求：must_keep 必须保持 / may_change 允许变化 / change_only 本轮只改；每项最多 1000 字符')
 
 
 class ArtifactReview(BaseModel):
@@ -47,6 +48,7 @@ class ArtifactReview(BaseModel):
     matches_request: Literal['pass', 'fail', 'unsure']
     preferred: bool = False
     notes: str = Field('', max_length=2000)
+    requirements: dict[Literal['must_keep', 'may_change', 'change_only'], Literal['pass', 'fail', 'unsure']] = Field(default_factory=dict)
 
 
 @router.put('/jobs/{job_id}/artifacts/{name}/review')
@@ -90,18 +92,13 @@ class VideoRequest(BaseModel):
     起始图必填；提示词只描述想要的运动，可以留空——内容由那张图承载。
     """
     image_base64: str = Field(..., description='起始图的 base64（可含 data: 前缀）')
-    prompt: str = Field('', description='描述想要的运动，例如 "clouds drift, slow push in"')
-    duration: str = Field('normal', description='时长档位：short 2.3s / normal 5.2s / long 8s')
+    prompt: str = Field('', description='描述想要的运动与声音，例如 "clouds drift, slow push in, wind noise"')
+    model: str = Field('ltx-2.5', description='ltx-2.5（画质）/ ltx-2.3（NSFW LoRA 生态更全）')
+    duration: str = Field('normal', description='时长档位：short 2s / normal 5s / long 8s')
     size: str = Field('landscape', description='尺寸预设键，见 /api/v1/params 的 video.sizes')
-    negative: str = Field('')
-    steps: int = Field(6, description='10Eros-Max Turbo 采样步数')
-    cfg: float = Field(1.0)
-    shift: float = Field(12.0, description='H3 视频 sigma shift；音频 shift 固定 3')
-    sampler: str = Field('res_multistep')
-    scheduler: str = Field('simple')
     seed: int | None = Field(None, description='省略为随机；实际值写在返回任务的 params.seed')
+    loras: list[LoraChoice] | None = Field(None, description='叠加的 LoRA，按 model 分族（见 GET /api/v1/loras），最多 6 个')
     rating: str | None = Field(None, description='尺度：general 日常 / suggestive 暗示 / explicit 露骨；省略用服务端默认')
-    lora_strength: float = Field(1.0, description='兼容旧字段；模型已内置 Turbo，仅接受 1.0')
 
 
 class EditRequest(BaseModel):
@@ -311,14 +308,16 @@ def capabilities() -> dict:
         'description': '个人生图服务：文生图、图生图、指令编辑。产物存本地磁盘。',
         'modes': settings.MODES,
         'endpoints': {
+            'artifact_reuse': {'method': 'GET', 'path': '/api/v1/jobs/{id}/artifacts/{name}/reuse',
+                               'body': '单张图片的生成设置、目标页面与原始输入图 URL；只读取，不提交生成'},
             'people_benchmark': '/api/v1/benchmarks/people',
             'artifact_review': {'method': 'PUT', 'path': '/api/v1/jobs/{id}/artifacts/{name}/review',
-                                'body': '人工评审：anatomy, matches_request, preferred, notes'},
+                                'body': '人工评审：anatomy, matches_request, preferred, notes；可选 requirements 逐项评审创作要求'},
             'params': '/api/v1/params',
             'loras': {'method': 'GET', 'path': '/api/v1/loras',
-                      'body': '文生图可带 loras: [{id, strength}]，仅 Pony / Anima'},
+                      'body': '文生图（Pony / Anima）与图生视频（LTX-2.3 / LTX-2.5）可带 loras: [{id, strength}]'},
             'director': {'method': 'POST', 'path': '/api/v1/director',
-                         'body': 'application/json（brief；可选 count、rating、model、loras、review、preset）'},
+                         'body': 'application/json（brief；可选 count、rating、model、loras、review、preset、creative_spec）'},
             'director_approve': {'method': 'POST', 'path': '/api/v1/jobs/{id}/approve',
                                  'body': 'review 状态的一句话出图：可选 variants 整体替换计划'},
             'text_to_image': {'method': 'POST', 'path': '/api/v1/images',
@@ -351,8 +350,8 @@ def capabilities() -> dict:
             '同参数重复提交返回 200 与已有任务，created=false。省略 seed 则每次随机，不会撞车。',
             '输入图片上限 %d MiB，只收 PNG/JPEG。' % (settings.MAX_UPLOAD_BYTES // (1 << 20)),
             '服务不鉴权，部署在 tailnet 内。',
-            '图生视频使用 10Eros-Max beta5 Turbo（Modal app aladin-video-h3-v1），'
-            '产物是有声 webm，默认约 5.2 秒 / 24fps；档位见 /api/v1/params 的 video。',
+            '图生视频有两套：ltx-2.5（默认，画质好）与 ltx-2.3（NSFW LoRA 多），各自一个 Modal app；'
+            '产物是有声 webm，默认 5 秒 / 24fps；档位见 /api/v1/params 的 video，LoRA 见 /api/v1/loras。',
         ],
         'openapi': '/openapi.json',
         'docs': '/docs',
@@ -402,37 +401,45 @@ def parameter_bounds() -> dict:
         'edit_modes': settings.MODES,
         'max_upload_bytes': settings.MAX_UPLOAD_BYTES,
         'director': {'brief_chars': 4000, 'count': [1, 8], 'default_count': None,
+                     'creative_spec': {'fields': ['must_keep', 'may_change', 'change_only'], 'field_chars': 1000},
                      'presets': {'manga': {'label': PRESETS['manga'], 'count': [MANGA_MIN, MANGA_MAX],
                                            'default_count': MANGA_DEFAULT,
                                            'layouts': {n: manga_layout(n) for n in MANGA_LAYOUTS},
                                            'beats': BEATS, 'shots': SHOTS}}},
         'video': {
+            'models': video_models(),
             'durations': settings.VIDEO_DURATIONS,
             'sizes': settings.VIDEO_SIZES,
             'defaults': settings.VIDEO_DEFAULT_PARAMS,
             'limits': settings.VIDEO_LIMITS,
-            'samplers': settings.VIDEO_SAMPLERS,
             'fps': settings.VIDEO_FPS,
         },
     })
 
 
+def video_models() -> dict:
+    """视频模型表（给 /api/v1/params 与视频页）：id -> 名称。"""
+    from .video_worker import MODELS
+    return {key: {'label': spec['label']} for key, spec in MODELS.items()}
+
+
 @router.post('/videos', status_code=202)
 async def create_video(file: UploadFile = File(...), prompt: str = Form(''),
+                       model: str = Form('ltx-2.5'),
                        duration: str = Form('normal'), size: str = Form('landscape'),
-                       negative: str = Form(''), steps: int = Form(6),
-                       cfg: float = Form(1.0), shift: float = Form(12.0),
-                       sampler: str = Form('res_multistep'), scheduler: str = Form('simple'),
-                       seed: str = Form(''), lora_strength: float = Form(1.0),
+                       seed: str = Form(''), loras: str = Form('', description='JSON 数组 [{id, strength}]'),
                        rating: str | None = Form(None),
                        wait: bool = Query(False),
                        timeout: int = Query(WAIT_DEFAULT_SECONDS)):
-    """图生视频（10Eros-Max H3）。起始图必须上传；提示词可留空，只描述运动。"""
+    """图生视频（LTX-2.3 / LTX-2.5）。起始图必须上传；提示词可留空，只描述运动与声音。"""
     seed_value, seed_error = rules.parse_seed(seed)
     if seed_error:
         raise HTTPException(status_code=422, detail=[seed_error])
-    built, errors = rules.video_params(prompt, negative, duration, size, steps, cfg,
-                                       shift, seed_value, sampler, scheduler, lora_strength,
+    try:
+        chosen = json.loads(loras) if loras.strip() else []
+    except ValueError:
+        raise HTTPException(status_code=422, detail=['loras 不是合法的 JSON']) from None
+    built, errors = rules.video_params(prompt, duration, size, seed_value, model, chosen,
                                        rating)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
@@ -460,10 +467,10 @@ async def create_video_base64(body: VideoRequest, wait: bool = Query(False),
     if len(data) > settings.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=422, detail=[
             '图片不能超过 %d MiB' % (settings.MAX_UPLOAD_BYTES // (1 << 20))])
-    built, errors = rules.video_params(body.prompt, body.negative, body.duration,
-                                       body.size, body.steps, body.cfg, body.shift,
-                                       body.seed, body.sampler, body.scheduler,
-                                       body.lora_strength, body.rating)
+    built, errors = rules.video_params(body.prompt, body.duration, body.size, body.seed,
+                                       body.model,
+                                       [c.model_dump(exclude_none=True) for c in body.loras or []],
+                                       body.rating)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     stored = rules.store_bytes(data)
@@ -631,6 +638,17 @@ def job_artifact(job_id: str, name: str):
     return FileResponse(path, media_type=media)
 
 
+@router.get('/jobs/{job_id}/artifacts/{name}/reuse')
+def artifact_reuse(job_id: str, name: str):
+    from .reuse import artifact_settings
+    try:
+        return artifact_settings(job_id, name)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+
+
 def _serve_input(job_id: str):
     row = db.job(job_id)
     if row is None or not row.get('input_path'):
@@ -729,15 +747,15 @@ def remove_gallery(item_id: int) -> dict:
 
 def submit_director(brief: str, count: int | None = None, rating: str | None = None,
                     model: str | None = None, loras=None, review: bool = False,
-                    preset: str | None = None) -> tuple[str, bool]:
-    built, errors = rules.director_params(brief, count, rating, model, loras, review, preset)
+                    preset: str | None = None, creative_spec=None) -> tuple[str, bool]:
+    built, errors = rules.director_params(brief, count, rating, model, loras, review, preset, creative_spec)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     try:
         return pipeline.enqueue(brief.strip(), built['count'] or 1, built, mode='director'), True
     except UniqueViolation:
         row = db.job_by_result_key(director.build(brief, built['count'], built['rating'], built['model'],
-                                                  built['loras'], built.get('preset'))['key'])
+                                                  built['loras'], built.get('preset'), built.get('creative_spec'))['key'])
         if row is None:
             raise HTTPException(status_code=409, detail='相同需求任务已存在') from None
         return row['id'], False
@@ -748,5 +766,5 @@ async def create_director(body: DirectorRequest, wait: bool = Query(False),
                           timeout: int = Query(WAIT_DEFAULT_SECONDS)):
     job_id, created = submit_director(
         body.brief, body.count, body.rating, body.model,
-        [c.model_dump(exclude_none=True) for c in body.loras or []], body.review, body.preset)
+        [c.model_dump(exclude_none=True) for c in body.loras or []], body.review, body.preset, body.creative_spec)
     return await _respond(job_id, created, wait, timeout)

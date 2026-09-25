@@ -669,10 +669,8 @@ class VideoAppTest(unittest.TestCase):
         reset()
 
     def _post(self, data=PNG_A, **fields):
-        form = {'prompt': 'clouds drift slowly', 'duration': 'short',
-                'size': 'landscape', 'negative': '', 'steps': 4, 'cfg': 1.0,
-                'shift': 8.0, 'sampler': 'euler', 'scheduler': 'simple',
-                'seed': 0, 'lora_strength': 1.0}
+        form = {'prompt': 'clouds drift slowly', 'model': 'ltx-2.5', 'duration': 'short',
+                'size': 'landscape', 'seed': 0, 'loras': ''}
         form.update(fields)
         return self.client.post('/apps/video/jobs',
                                 files={'file': ('in.png', data, 'image/png')},
@@ -713,10 +711,22 @@ class VideoAppTest(unittest.TestCase):
         row = self._newest_job()
         self.assertEqual(row['app'], 'video')
         self.assertEqual(row['mode'], 'i2v')
-        self.assertEqual(row['request']['model'], '10eros-max-h3-turbo-beta5')
-        self.assertEqual(row['params']['frames'], 56, 'short 档 = 56 帧')
-        self.assertEqual(row['params']['seconds'], 2.33)
+        self.assertEqual(row['request']['model'], 'ltx-2.5')
+        self.assertEqual(row['params']['frames'], 49, 'short 档 = 49 帧')
+        self.assertEqual(row['params']['seconds'], 2.04)
         self.assertEqual(row['image_count'], 1)
+
+    def test_submit_with_video_loras_appends_triggers(self):
+        loras = json.dumps([{'id': 'ltx23-deepthroat', 'strength': 0.9}])
+        self.assertEqual(self._post(seed=4, model='ltx-2.3', loras=loras).status_code, 303)
+        row = self._newest_job()
+        self.assertEqual(row['request']['model'], 'ltx-2.3')
+        self.assertEqual(row['request']['loras'][0]['strength'], 0.9)
+        self.assertIn('LTXdeepthroat', row['request']['prompt'])
+
+    def test_video_lora_from_the_other_model_is_rejected(self):
+        loras = json.dumps([{'id': 'ltx23-deepthroat'}])
+        self.assertEqual(self._post(seed=4, model='ltx-2.5', loras=loras).status_code, 400)
 
     def test_same_image_same_params_redirects_to_the_existing_job(self):
         first = self._post(seed=5)
@@ -784,6 +794,7 @@ class VideoAppTest(unittest.TestCase):
         self.assertEqual(video['fps'], 24)
         self.assertIn('normal', video['durations'])
         self.assertIn('landscape', video['sizes'])
+        self.assertEqual(set(video['models']), {'ltx-2.3', 'ltx-2.5'})
 
 
 class CollectionTest(unittest.TestCase):

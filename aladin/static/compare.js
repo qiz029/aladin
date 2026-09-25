@@ -13,6 +13,19 @@
     form.elements.matches_request.value = review.matches_request || 'unsure';
     form.elements.preferred.checked = review.preferred || false;
     form.elements.notes.value = review.notes || '';
+    const requirements = side.querySelector('.requirement-reviews');
+    requirements.replaceChildren();
+    const labels = {must_keep: '必须保持', may_change: '允许变化', change_only: '本轮只改'};
+    for (const [key, text] of Object.entries(item.job.params.creative_spec || {})) {
+      const label = document.createElement('label');
+      label.textContent = `${labels[key]}：${text}`;
+      const select = document.createElement('select');
+      select.dataset.requirement = key;
+      for (const [value, title] of [['unsure', '不确定'], ['pass', '符合'], ['fail', '不符合']]) select.add(new Option(title, value));
+      select.value = review.requirements?.[key] || 'unsure';
+      label.append(select); requirements.append(label);
+    }
+    side.querySelector('.reuse-link').href = `/jobs/${item.job.id}/artifacts/${item.name}/reuse`;
     side.querySelector('.review-status').textContent = review.updated_at ? '已保存人工评审' : '尚未评审';
     side.querySelector('.repair-link').href = '/apps/edit?source=' + encodeURIComponent(`/jobs/${item.job.id}/artifacts/${item.name}`);
   }
@@ -28,7 +41,8 @@
       const status = side.querySelector('.review-status');
       const button = form.querySelector('button'); button.disabled = true; selector.disabled = true;
       const body = {anatomy:form.elements.anatomy.value, matches_request:form.elements.matches_request.value,
-        preferred:form.elements.preferred.checked, notes:form.elements.notes.value};
+        preferred:form.elements.preferred.checked, notes:form.elements.notes.value,
+        requirements: Object.fromEntries([...form.querySelectorAll('[data-requirement]')].map(s => [s.dataset.requirement, s.value]))};
       try {
         const response = await fetch(`${item.url}/review`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if (!response.ok) throw Error('保存失败，请重试');

@@ -175,6 +175,9 @@ def main() -> int:
     director = sub.add_parser('director', help='一句话规划并生成图片')
     director.add_argument('brief')
     director.add_argument('--count', type=int, default=None)
+    director.add_argument('--must-keep', default='', help='必须保持的设定，最多 1000 字符')
+    director.add_argument('--may-change', default='', help='允许变化的设定，最多 1000 字符')
+    director.add_argument('--change-only', default='', help='本轮只修改哪些内容，最多 1000 字符')
     director.add_argument('--rating', choices=('general', 'suggestive', 'explicit'),
                         help='尺度：日常 / 暗示 / 露骨；省略用服务端默认')
     director.add_argument('--model', default=None,
@@ -232,14 +235,17 @@ def main() -> int:
 
     params = sub.add_parser('params', help='参数边界与预设')
 
-    video = sub.add_parser('video', help='图生视频（10Eros-Max H3，几秒钟的 webm）')
+    video = sub.add_parser('video', help='图生视频（LTX-2.5 / LTX-2.3，几秒钟的有声 webm）')
     video.add_argument('--image', required=True, help='起始图：画面内容由它决定')
-    video.add_argument('--prompt', default='', help='描述想要的运动，可留空')
+    video.add_argument('--prompt', default='', help='描述想要的动作、镜头与声音，可留空')
+    video.add_argument('--model', default='ltx-2.5', choices=('ltx-2.5', 'ltx-2.3'),
+                       help='ltx-2.5 画质更好 / ltx-2.3 NSFW LoRA 更多')
     video.add_argument('--duration', default='normal', choices=('short', 'normal', 'long'),
-                       help='short 2.3s / normal 5.2s / long 8s')
+                       help='short 2s / normal 5s / long 8s')
     video.add_argument('--size', default='landscape',
                        help='landscape / portrait / landscape-hd / portrait-hd')
-    video.add_argument('--steps', type=int, default=6, help='默认 6 步（内置 Turbo）')
+    video.add_argument('--lora', action='append', default=[], metavar='ID[:STRENGTH]',
+                       help='叠加 LoRA（按 --model 分族），可重复；可选 id 见 GET /api/v1/loras')
     video.add_argument('--seed', type=int, default=None, help='省略为随机')
     video.add_argument('--rating', choices=('general', 'suggestive', 'explicit'),
                         help='尺度：日常 / 暗示 / 露骨；省略用服务端默认')
@@ -347,6 +353,9 @@ def main() -> int:
             payload['model'] = args.model
         if args.preset:
             payload['preset'] = args.preset
+        spec = {key: getattr(args, key) for key in ('must_keep', 'may_change', 'change_only') if getattr(args, key)}
+        if spec:
+            payload['creative_spec'] = spec
         status, body = call('POST', '/api/v1/director', payload, timeout=120)
         if status not in (200, 202):
             return fail(status, body)
@@ -365,15 +374,15 @@ def main() -> int:
             print('图片超过 8 MiB', file=sys.stderr)
             return 1
         payload = {'image_base64': base64.b64encode(data).decode(),
-                   'prompt': args.prompt, 'duration': args.duration,
-                   'size': args.size, 'steps': args.steps, 'seed': args.seed,
-                   'rating': args.rating}
+                   'prompt': args.prompt, 'model': args.model, 'duration': args.duration,
+                   'size': args.size, 'seed': args.seed, 'rating': args.rating,
+                   'loras': lora_choices(args.lora)}
         status, body = call('POST', '/api/v1/videos/base64', payload, timeout=120)
         if status not in (200, 202):
             return fail(status, body)
         if not body.get('created'):
             print(f"note 同参数任务已存在，复用 {body['id']}", file=sys.stderr)
-        # 视频慢得多：一条 5 秒片子在容器里要 1–2 分钟，轮询间隔放宽
+        # 视频慢得多：冷启动加两段采样要几分钟，轮询间隔放宽
         if args.wait:
             body = wait(body['id'], every=8)
         return show(body, out_dir if args.wait else None)

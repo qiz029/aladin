@@ -17,9 +17,10 @@
     <form class="review-form">
       <label>肢体结构<select name="anatomy"><option value="unsure">不确定</option><option value="pass">合理</option><option value="fail">有明显错误</option><option value="not_applicable">不适用</option></select></label>
       <label>符合需求<select name="matches_request"><option value="unsure">不确定</option><option value="pass">符合</option><option value="fail">不符合</option></select></label>
+      <div class="requirement-reviews"></div>
       <label><input type="checkbox" name="preferred"> 我愿意保留这张</label>
       <label>具体问题<textarea name="notes" maxlength="2000" placeholder="例如：左腕连接错误；手指被遮挡，无法判断"></textarea></label>
-      <div class="bar-row"><button type="submit">保存人工评审</button><a class="repair-link">局部修复</a></div>
+      <div class="bar-row"><button type="submit">保存人工评审</button><a class="reuse-link">用相同设置创作</a><a class="repair-link">局部修复</a></div>
       <p class="review-status small" role="status"></p>
     </form>
   </section>
@@ -28,5 +29,5 @@
 <p class="small muted">保存会更新该图片的人工评审。所有候选和原始参数都会保留；没有自动质量评分。</p>
 {% for job in jobs %}<a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/review.json">导出 {{ job.id[:8] }} 的评审与参数</a>{% endfor %}
 <script type="application/json" id="comparisonData">{{ jobs|tojson }}</script>
-<script src="/static/compare.js" defer></script>
+<script src="/static/compare.js?v=20260924e" defer></script>
 {% endblock %}

@@ -145,30 +145,36 @@ def edit_params(mode: str, prompt: str, images: int, negative: str, steps: int,
     return validate_length(prompt, params, limits['prompt_chars'], errors), errors
 
 
-def video_params(prompt: str, negative: str, duration: str, size: str, steps: int,
-                 cfg: float, shift: float, seed: int | None, sampler: str, scheduler: str,
-                 lora_strength: float, rating: str | None = None) -> tuple[dict, list[str]]:
+def video_params(prompt: str, duration: str, size: str, seed: int | None,
+                 model: str | None = None, loras=None,
+                 rating: str | None = None) -> tuple[dict, list[str]]:
     """图生视频参数。边界与 aladin/video_worker.py 的 validate() 同一套。
 
-    时长在实现上就是帧数（H3 按 24fps 生成），页面上给的是「秒」的档位。
+    时长在实现上就是帧数（24fps、8n+1），页面上给的是「秒」的档位。distilled 模型的
+    步数、CFG、采样器由官方模板固定，不对外开放。LoRA 按模型（ltx-2.3 / ltx-2.5）分族。
     """
+    from .loras import resolve, triggers_for
+    from .video_worker import MODELS
+
     limits = settings.VIDEO_LIMITS
     seed = resolve_seed(seed)
     errors: list[str] = []
     prompt = (prompt or '').strip()
+    model = model or settings.VIDEO_DEFAULT_PARAMS['model']
+    if model not in MODELS:
+        errors.append('不支持的视频模型：' + str(model))
+        model = settings.VIDEO_DEFAULT_PARAMS['model']
     # 允许空提示词：输入图已经承载了内容，提示词只是描述想要的运动。
     if len(prompt) > limits['prompt_chars']:
         errors.append(f'提示词最多 {limits["prompt_chars"]} 字符')
-    if len(negative or '') > limits['negative_chars']:
-        errors.append(f'负向提示词最多 {limits["negative_chars"]} 字符')
     slot = settings.VIDEO_DURATIONS.get(duration)
     if slot is None:
         errors.append('不支持的时长')
         slot = settings.VIDEO_DURATIONS[settings.VIDEO_DEFAULT_PARAMS['duration']]
     frames = slot['frames']
     low, high = limits['frames']
-    if not low <= frames <= high or (frames - 5) % 17:
-        errors.append(f'帧数需在 {low}–{high} 之间且满足 17n+5')
+    if not low <= frames <= high or (frames - 1) % 8:
+        errors.append(f'帧数需在 {low}–{high} 之间且满足 8n+1')
     preset = settings.VIDEO_SIZES.get(size)
     if preset is None:
         errors.append('不支持的尺寸')
@@ -179,28 +185,20 @@ def video_params(prompt: str, negative: str, duration: str, size: str, steps: in
         if not size_low <= value <= size_high or value % limits['size_multiple']:
             errors.append(f'{label} {value} 不在 {size_low}–{size_high} 或不是'
                           f' {limits["size_multiple"]} 的倍数')
-    if not limits['steps'][0] <= steps <= limits['steps'][1]:
-        errors.append(f'步数需在 {limits["steps"][0]}–{limits["steps"][1]} 之间')
-    if not limits['cfg'][0] <= cfg <= limits['cfg'][1]:
-        errors.append(f'CFG 需在 {limits["cfg"][0]}–{limits["cfg"][1]} 之间')
-    if not limits['shift'][0] <= shift <= limits['shift'][1]:
-        errors.append(f'Shift 需在 {limits["shift"][0]}–{limits["shift"][1]} 之间')
-    if not limits['lora_strength'][0] <= lora_strength <= limits['lora_strength'][1]:
-        errors.append('10Eros-Max Turbo 已内置加速，lora_strength 仅兼容默认值 1')
-    if sampler not in settings.VIDEO_SAMPLERS:
-        errors.append('不支持的采样器')
-    if scheduler not in settings.SCHEDULERS:
-        errors.append('不支持的调度器')
     if not limits['seed'][0] <= seed <= limits['seed'][1]:
         errors.append('随机种子超出范围')
-    params = {'negative': negative or '', 'duration': duration, 'size': size,
+    chosen, lora_errors = resolve(loras, model)
+    errors.extend(lora_errors)
+    params = {'model': model, 'duration': duration, 'size': size,
               'width': width, 'height': height, 'frames': frames,
               'fps': settings.VIDEO_FPS, 'seconds': round(frames / settings.VIDEO_FPS, 2),
-              'steps': steps, 'cfg': cfg, 'shift': shift, 'sampler': sampler,
-              'scheduler': scheduler, 'seed': seed, 'loraStrength': float(lora_strength),
+              'seed': seed,
               # 账本只有 image_count 一列，视频固定记 1，免得模板与统计要分叉
               'images': 1,
               'rating': _rating(rating, errors), 'prompt_family': family_for(app='video')}
+    if chosen:
+        params['loras'] = chosen
+        params['lora_triggers'] = triggers_for(chosen)
     return validate_length(prompt, params, limits['prompt_chars'], errors), errors
 
 
@@ -272,7 +270,8 @@ def _rating(rating, errors: list[str]) -> str:
 
 def director_params(brief: str, count: int | None = None, rating: str | None = None,
                     model: str | None = None, loras=None,
-                    review: bool = False, preset: str | None = None) -> tuple[dict, list[str]]:
+                    review: bool = False, preset: str | None = None,
+                    creative_spec=None) -> tuple[dict, list[str]]:
     """一句话出图：需求、张数、尺度、目标模型、LoRA（整批共用）、是否先看计划再生成、预设。
 
     预设 manga 的张数就是一页的格数（4–8，默认 6），版式随格数定。
@@ -318,4 +317,11 @@ def director_params(brief: str, count: int | None = None, rating: str | None = N
              'model': model, 'loras': chosen, 'review': review}
     if preset:
         built['preset'] = preset
+    from .planner_schema import creative_spec as validate_spec
+    try:
+        spec = validate_spec(creative_spec)
+        if spec:
+            built['creative_spec'] = spec
+    except ValueError as error:
+        errors.append(str(error))
     return built, errors

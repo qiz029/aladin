@@ -1,48 +1,54 @@
-"""aladin 的第二个 Modal app：跑 10Eros-Max H3 图生视频与音频。
+"""aladin 的视频 Modal app：LTX 图生视频与音频。一个文件部署两套，各自独立的 app 与权重 Volume：
 
-镜像前几层与 aladin_modal_app.py **逐字一致**，以便复用其已缓存的 apt/pip/git 层；
-任何前缀差异都会让后续昂贵层失效并触发十几分钟重建。
+    ALADIN_VIDEO_MODEL=ltx-2.3 modal deploy aladin_video_modal_app.py
+    ALADIN_VIDEO_MODEL=ltx-2.5 modal deploy aladin_video_modal_app.py
 
-权重与产物用独立 Volume（AGENTS.md 的命名约定：不与生图那套混用，
-「清生图缓存」和「清视频缓存」互不牵连）。
+LTX-2.5 的 HF 仓库需要先在网页上同意协议，下载用 Modal secret `aladin-hf`（含 HF_TOKEN）；
+token 只在 Modal 里，不进代码与日志。2.3 的仓库是公开的，不挂 secret。
+
+ComfyUI 钉在 v0.37.0（LTX-2.5 节点所需），与生图镜像的层不再共享。
+产物 Volume 两套共用（任务 key 已含模型与钉版，不会撞）。
 """
+import os
 from pathlib import Path
 
 import modal
 
-COMFY_REVISION = 'c194dd00cd42aa18d9dbf27d977bf6b85d9ea565'
-GGUF_REVISION = 'f912d5e5c25921e41eae2c0131eeb4d350e7c165'
+MODEL = os.environ.get('ALADIN_VIDEO_MODEL', 'ltx-2.5')
+COMFY_REVISION = '73c9bad4d21e7addbe1d13bc92eee0f1431b017d'
+APPS = {'ltx-2.3': ('aladin-video-ltx23-v1', 'aladin-ltx23-models-v1', False),
+        'ltx-2.5': ('aladin-video-ltx25-v1', 'aladin-ltx25-models-v1', True)}
+if MODEL not in APPS:
+    raise SystemExit('ALADIN_VIDEO_MODEL 需为 ' + ' / '.join(APPS))
+APP_NAME, VOLUME_NAME, GATED = APPS[MODEL]
 
 
 def _image() -> modal.Image:
-    base = (modal.Image.debian_slim(python_version='3.11')
-            .apt_install('git')
+    return (modal.Image.debian_slim(python_version='3.11')
+            .apt_install('git', 'ffmpeg')
             .pip_install('torch==2.8.0', 'torchvision==0.23.0', 'torchaudio==2.8.0',
                          index_url='https://download.pytorch.org/whl/cu128')
             .run_commands('git clone --quiet https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI',
                           f'git -C /opt/ComfyUI checkout --quiet {COMFY_REVISION}',
-                          'git clone --quiet https://github.com/leejet/ComfyUI-GGUF /opt/ComfyUI/custom_nodes/ComfyUI-GGUF',
-                          f'git -C /opt/ComfyUI/custom_nodes/ComfyUI-GGUF checkout --quiet {GGUF_REVISION}',
-                          'pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt',
-                          'pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt',
-                          'pip install --no-cache-dir transformers==4.57.6'))
-    return (base.pip_install('websocket-client==1.9.0', 'huggingface-hub>=0.36')
-            .apt_install('ffmpeg')
-            .env({'HF_HOME': '/models/h3', 'PYTHONPATH': '/opt'})
+                          'pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt')
+            .pip_install('websocket-client==1.9.0', 'huggingface-hub>=0.36')
+            .env({'HF_HOME': '/models/hf', 'PYTHONPATH': '/opt', 'ALADIN_VIDEO_MODEL': MODEL})
             .add_local_file(Path(__file__).resolve(), '/opt/aladin_video_modal_app.py', copy=True)
             # 只挂 video_worker.py：挂整个 aladin/ 会让镜像在每次改 web 代码时失效重建。
             .add_local_file(Path(__file__).resolve().parent / 'aladin' / 'video_worker.py',
                             '/opt/aladin/video_worker.py', copy=True))
 
 
-app = modal.App('aladin-video-h3-v1', include_source=False)
-models = modal.Volume.from_name('aladin-h3-models-v1', create_if_missing=True)
+app = modal.App(APP_NAME, include_source=False)
+models = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 results = modal.Volume.from_name('aladin-video-results-v1', create_if_missing=True)
+secrets = [modal.Secret.from_name('aladin-hf')] if GATED else []
 
 
 @app.function(image=_image(), gpu='L40S', cpu=8, memory=98304, timeout=3600,
               startup_timeout=1200, retries=0, min_containers=0, max_containers=1,
-              scaledown_window=2, volumes={'/models': models, '/results': results})
+              scaledown_window=2, volumes={'/models': models, '/results': results},
+              secrets=secrets)
 def generate(request: dict, source: bytes = b'') -> dict:
     """跑一个受限的图生视频请求；产物写 Volume，返回值只带 JSON 原语。
 
@@ -133,10 +139,21 @@ def worker_probe() -> dict:
             'weights': [item[3] for item in video_worker.MODELS[video_worker.MODEL]['files']]}
 
 
-@app.function(image=_image(), timeout=1800, cpu=4, memory=8192, volumes={'/models': models})
+@app.function(image=_image(), timeout=3600, cpu=4, memory=8192, volumes={'/models': models},
+              secrets=secrets)
 def prepare_models() -> dict:
     """CPU 下载权重，避免 GPU 冷启动时为下载等待付费。"""
     from aladin import video_worker
-    manifest = video_worker.ensure_weights()
+    manifest = video_worker.ensure_weights(video_worker.MODEL)
     models.commit()
     return {'model': video_worker.MODEL, 'files': manifest['files']}
+
+
+@app.function(image=_image(), timeout=3600, cpu=4, memory=8192, volumes={'/models': models},
+              secrets=secrets)
+def fetch_lora(repo: str, revision: str, hub: str, file: str, size: int, sha256: str) -> dict:
+    """把 HF 上的 LoRA 直接下载进本 app 的模型 Volume（loras-sync 调用）。"""
+    from aladin import video_worker
+    result = video_worker.fetch_lora(repo, revision, hub, file, size, sha256)
+    models.commit()
+    return result

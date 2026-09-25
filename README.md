@@ -20,6 +20,16 @@ Agent：`POST /api/v1/director`，JSON `{"brief":"海边咖啡馆的两张宣传
 LoRA 的说明会告诉 planner 以便配合，触发词自动补。勾选「先看计划再生成」时，规划完停在「等待确认」：
 可以逐张改提示词、尺寸、步数、CFG、种子或删掉几张，确认后才生成（API：`POST /api/v1/jobs/{id}/approve`）。
 
+可选填写「必须保持 / 允许变化 / 本轮只改」，每项最多 1000 字符。API 使用
+`creative_spec: {"must_keep":"蓝色外套", "may_change":"背景", "change_only":"傍晚暖光"}`。
+要求随任务和规划请求保存，参与幂等键；planner 在每张的提示词与规划说明里落实要求。
+这是文本规划约束，不保证生成图的视觉一致性；任务页展示原要求，候选比较页可以分别标记符合 / 不符合 / 不确定。
+
+任务图片、图片预览和有来源任务的收藏提供「用相同设置创作」：恢复该张图的模型、提示词、负向词、
+尺寸、步数、CFG、采样器、调度器、种子、尺度和 LoRA，默认生成 1 张；改图恢复原始输入图、模式、
+重绘幅度与修复选区。只是回填表单，点击不会提交 GPU 任务。原输入图或模型 / LoRA 不可用时明确报错。
+Agent 可用 `GET /api/v1/jobs/{id}/artifacts/{name}/reuse` 读取相同设置；收藏的原任务删除后不能再恢复设置。
+
 「创作方式」选**日式漫画（一页多格）**（API `preset: "manga"`）时，planner 先写故事梗概与人物固定外貌，
 再按一页 4–8 格的版式（右上起、右→左阅读）逐格分镜：每格有节拍、镜头、情节、旁白与对白，
 尺度逐格递进且不超过所选上限，尺寸由格子形状决定。对白与旁白目前只保存在计划里；拼页和对白框排版尚未实现。
@@ -27,7 +37,7 @@ LoRA 的说明会告诉 planner 以便配合，触发词自动补。勾选「先
 ## 状态
 
 已端到端跑通四条链路：文生图（Qwen-Image 2.1 / Anima / Pony Realism）、改图（图生图、指令编辑、
-局部修复）、图生视频（10Eros-Max）、一句话出图（Qwen planner → 生图）。
+局部修复）、图生视频（LTX-2.5 / LTX-2.3）、一句话出图（Qwen planner → 生图）。
 每条都是 提交 → Modal 上生成 → 采样步级实时进度 → 产物回本地 → 收藏。
 
 ## 快速开始
@@ -48,9 +58,15 @@ uv --cache-dir .cache/uv run python -m aladin            # api + worker 同进�
 ```sh
 uv --cache-dir .cache/uv run modal deploy aladin_modal_app.py            # 生图 / 改图
 uv --cache-dir .cache/uv run modal deploy aladin_extra_image_modal_app.py  # Anima / Pony
-uv --cache-dir .cache/uv run modal deploy aladin_video_modal_app.py      # 图生视频
+ALADIN_VIDEO_MODEL=ltx-2.5 uv --cache-dir .cache/uv run modal deploy aladin_video_modal_app.py  # 图生视频 LTX-2.5
+ALADIN_VIDEO_MODEL=ltx-2.3 uv --cache-dir .cache/uv run modal deploy aladin_video_modal_app.py  # 图生视频 LTX-2.3
 uv --cache-dir .cache/uv run modal deploy aladin_planner_modal_app.py    # 一句话出图的规划
 ```
+
+LTX-2.5 的 HF 仓库要先在网页上点「Agree and Access」，再建 Modal secret：
+`modal secret create aladin-hf HF_TOKEN=<token>`（token 只放在 Modal 里）。
+视频权重先用 CPU 预下载，免得 GPU 冷启动时为下载付费：
+`ALADIN_VIDEO_MODEL=ltx-2.5 uv --cache-dir .cache/uv run modal run aladin_video_modal_app.py::prepare_models`（2.3 同理）。
 
 ## 使用
 
@@ -304,14 +320,16 @@ uv --cache-dir .cache/uv run python -m unittest probe.test_watchdog
 
 ## LoRA
 
-Pony 与 Anima 支持叠加 LoRA（生图页选中这两个模型时出现 LoRA 面板；API 是 `loras` 字段）。
+生图的 Pony / Anima 与视频的 LTX-2.3 / LTX-2.5 支持叠加 LoRA（页面选中这些模型时出现 LoRA 面板；
+API 是 `loras` 字段）。LoRA 按底模分族，跨族会被挡住。
 
-- **目录**：`aladin/loras.py`。每项钉死 Civitai 的版本 ID 与 sha256，带默认强度、区间、触发词、互斥组、建议采样参数，
+- **目录**：`aladin/loras.py`。每项钉死 Civitai 的版本 ID（或 HF 仓库提交）与 sha256，带默认强度、区间、触发词、互斥组、建议采样参数，
   以及内置预设。页面上还可以把当前组合存成自己的预设（存在浏览器里）。
 - **同步**：`python -m aladin loras-sync [--only ID ...] [--dry-run]` 在本机下载、校验 sha256、上传到
   对应底模的模型 Volume（`loras/civitai-<版本>.safetensors`）。Civitai API key 放在 `.env` 的 `CIVITAI_API_KEY`，
-  只在本机使用，不进 Modal。
-- **容器**：只收「文件 + sha256 + 强度」，在加载器之后串接 `LoraLoader`，首次使用时核对 sha256 并记标记。
+  只在本机使用，不进 Modal。HF 来源的（Sulphur 2、官方 LTX LoRA）由视频 app 的 `fetch_lora`
+  在容器里直接下载（`loras/hf-<sha 前 16 位>.safetensors`），大文件不经本机。
+- **容器**：只收「文件 + sha256 + 强度」，在加载器之后串接 `LoraLoader`（视频是 `LoraLoaderModelOnly`，两段采样共用），首次使用时核对 sha256 并记标记。
   增删 LoRA、调默认值只改目录、再同步一次，**不用重新部署 Modal**。
 - **触发词**自动补到提示词末尾，冻结进 `params.prompt_defaults.triggers`；LoRA 选择与强度参与幂等键。
 - Qwen-Image 2.1 是新架构，旧 Qwen LoRA 不兼容（加载后静默无效），所以暂不支持。

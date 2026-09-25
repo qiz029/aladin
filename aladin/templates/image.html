@@ -6,6 +6,7 @@
 <div class="creator-layout">
 <div class="panel creator-panel">
   <form data-enhanced method="post" action="/apps/image/jobs">
+    {% if reuse %}{% include '_reuse_notice.html' %}{% endif %}
     <input type="hidden" name="negative_provided" value="true">
     <div class="field">
       <label for="model">模型</label>

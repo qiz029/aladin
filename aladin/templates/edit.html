@@ -6,6 +6,7 @@
 <div class="creator-layout">
 <div class="panel creator-panel">
   <form data-enhanced method="post" action="/apps/edit/jobs" enctype="multipart/form-data">
+    {% if reuse %}{% include '_reuse_notice.html' %}{% endif %}
     <div class="field">
       <label for="file">输入图片（PNG / JPEG，≤ {{ max_mb }} MiB）</label>
       <div class="upload"><div class="preview" id="preview">{{ icon('upload') }}</div><div class="upload-input">      <input type="file" id="file" name="file" data-preview="preview" data-max-bytes="{{ max_mb * 1048576 }}" accept="image/png,image/jpeg" required><div class="small muted">选择一张图片，开始下一次创作。</div></div></div>
@@ -15,11 +16,11 @@
       <label>模式</label>
       <div class="chips">
         <label class="chip">
-          <input type="radio" name="mode" value="img2img" checked>
+          <input type="radio" name="mode" value="img2img" {% if defaults.mode != 'edit' %}checked{% endif %}>
           <span>图生图</span><span class="hint">以这张图为起点重画</span>
         </label>
         <label class="chip">
-          <input type="radio" name="mode" value="edit">
+          <input type="radio" name="mode" value="edit" {% if defaults.mode == 'edit' %}checked{% endif %}>
           <span>指令编辑</span><span class="hint">照着提示词改</span>
         </label>
       </div>
@@ -28,9 +29,9 @@
     <div class="field">
       <label for="prompt">提示词</label>
       <textarea id="prompt" name="prompt" maxlength="2000"
-                placeholder="指令编辑必填，例如：把杯子换成蓝色。图生图可以留空。"></textarea>
+                placeholder="指令编辑必填，例如：把杯子换成蓝色。图生图可以留空。">{{ defaults.prompt or '' }}</textarea>
     </div>
-    {{ rating_field('qwen') }}
+    {{ rating_field('qwen', defaults.rating) }}
 
     <div class="field" id="repairEditor">
       <label><input type="checkbox" id="repairEnabled"> 局部修复（指令编辑）</label>
@@ -98,7 +99,7 @@
       </div>
       <div class="field mt-2">
         <label for="negative">负向提示词（可选，CFG 为 1 时不生效）</label>
-        <textarea id="negative" name="negative" maxlength="2000"></textarea>
+        <textarea id="negative" name="negative" maxlength="2000">{{ defaults.negative or '' }}</textarea>
       </div>
       <p class="small muted">输出尺寸依据输入图片调整，无需另选。</p>
     </details>
@@ -125,5 +126,6 @@
 {% else %}
 <div class="empty">上传一张图片，试试新的可能。</div>
 {% endif %}
-<script src="/static/repair.js" defer></script>
+{% if reuse %}<script id="reuse-data" type="application/json">{{ reuse|tojson }}</script>{% endif %}
+<script src="/static/repair.js?v=20260924e" defer></script>
 {% endblock %}

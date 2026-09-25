@@ -11,6 +11,7 @@ import queue
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -49,7 +50,7 @@ APPS = [
     {
         'slug': 'video',
         'name': '生成视频',
-        'description': '10Eros-Max：给一张图，生成 24fps 有声视频。',
+        'description': 'LTX-2.5 / LTX-2.3：给一张图，生成 24fps 有声视频。',
     },
 ]
 
@@ -124,15 +125,33 @@ def index(request: Request):
 
 
 @app.get('/apps/edit', response_class=HTMLResponse)
-def edit_app(request: Request):
-    return TEMPLATES.TemplateResponse(request, 'edit.html', {
-        'defaults': settings.EDIT_DEFAULT_PARAMS,
+def edit_app(request: Request, source_job: str = '', source_name: str = ''):
+    recipe = _reuse_query(source_job, source_name, '/apps/edit')
+    return TEMPLATES.TemplateResponse(request, 'edit.html', edit_context(
+        recipe['settings'] if recipe else None, recipe))
+
+
+def _reuse_query(job_id: str, name: str, page: str):
+    if not job_id and not name:
+        return None
+    if not job_id or not name:
+        raise HTTPException(status_code=422, detail='回填需要完整的来源任务与图片名称')
+    recipe = api.artifact_reuse(job_id, name)
+    if recipe['page'] != page:
+        raise HTTPException(status_code=422, detail='请从原图片的「用相同设置创作」入口恢复设置')
+    return recipe
+
+
+def edit_context(defaults=None, reuse=None):
+    return {
+        'defaults': dict(settings.EDIT_DEFAULT_PARAMS, **(defaults or {})),
         'samplers': settings.SAMPLERS,
         'schedulers': settings.SCHEDULERS,
         'limits': settings.PARAM_LIMITS,
         'max_mb': settings.MAX_UPLOAD_BYTES // (1 << 20),
         'recent': [dict(item) for item in db.recent_artifacts(limit=12, app='image')],
-    })
+        'reuse': reuse,
+    }
 
 
 @app.get('/jobs/{job_id}/compare', response_class=HTMLResponse)
@@ -202,12 +221,14 @@ def job_input(job_id: str):
 
 @app.get('/apps/video', response_class=HTMLResponse)
 def video_app(request: Request):
+    from .api import video_models
+    from .loras import public_catalog
     return TEMPLATES.TemplateResponse(request, 'video.html', {
         'defaults': settings.VIDEO_DEFAULT_PARAMS,
+        'models': video_models(),
+        'lora_catalog': public_catalog(),
         'durations': settings.VIDEO_DURATIONS,
         'sizes': settings.VIDEO_SIZES,
-        'samplers': settings.VIDEO_SAMPLERS,
-        'schedulers': settings.SCHEDULERS,
         'limits': settings.VIDEO_LIMITS,
         'fps': settings.VIDEO_FPS,
         'max_mb': settings.MAX_UPLOAD_BYTES // (1 << 20),
@@ -217,17 +238,19 @@ def video_app(request: Request):
 
 @app.post('/apps/video/jobs')
 async def create_video_job(file: UploadFile = File(...), prompt: str = Form(''),
+                           model: str = Form('ltx-2.5'),
                            duration: str = Form('normal'), size: str = Form('landscape'),
-                           negative: str = Form(''), steps: int = Form(6),
-                           cfg: float = Form(1.0), shift: float = Form(12.0),
-                           sampler: str = Form('res_multistep'), scheduler: str = Form('simple'),
-                           seed: str = Form(''), lora_strength: float = Form(1.0),
+                           seed: str = Form(''), loras: str = Form(''),
                            rating: str | None = Form(None)):
     seed_value, seed_error = rules.parse_seed(seed)
     if seed_error:
         raise HTTPException(status_code=400, detail=seed_error)
-    built, errors = rules.video_params(prompt, negative, duration, size, steps, cfg,
-                                       shift, seed_value, sampler, scheduler, lora_strength,
+    try:
+        # 表单把 LoRA 选择序列化成 JSON 放在隐藏字段里；与 API 的 loras 字段同形
+        chosen = json.loads(loras) if loras.strip() else []
+    except ValueError:
+        raise HTTPException(status_code=400, detail='LoRA 选择格式不对') from None
+    built, errors = rules.video_params(prompt, duration, size, seed_value, model, chosen,
                                        rating)
     if errors:
         raise HTTPException(status_code=400, detail='；'.join(errors))
@@ -264,9 +287,12 @@ def image_context(defaults=None, recent=None):
 
 
 @app.get('/apps/image', response_class=HTMLResponse)
-def image_app(request: Request):
-    return TEMPLATES.TemplateResponse(request, 'image.html', image_context(
-        recent=[dict(item) for item in db.recent_artifacts(limit=12, app='image')]))
+def image_app(request: Request, source_job: str = '', source_name: str = ''):
+    recipe = _reuse_query(source_job, source_name, '/apps/image')
+    context = image_context(recipe['settings'] if recipe else None,
+        recent=[dict(item) for item in db.recent_artifacts(limit=12, app='image')])
+    context['reuse'] = recipe
+    return TEMPLATES.TemplateResponse(request, 'image.html', context)
 
 
 @app.post('/apps/image/jobs')
@@ -564,33 +590,31 @@ def director_app(request: Request):
 def create_director_job(brief: str = Form(''), rating: str | None = Form(None),
                         model: str = Form('qwen-image-2.1'), loras: str = Form(''),
                         review: bool = Form(False), preset: str = Form(''),
-                        count: int | None = Form(None)):
+                        count: int | None = Form(None), must_keep: str = Form(''),
+                        may_change: str = Form(''), change_only: str = Form('')):
     try:
         chosen = json.loads(loras) if loras.strip() else []
     except ValueError:
         raise HTTPException(status_code=400, detail='LoRA 选择格式不对') from None
     job_id, _ = api.submit_director(brief, count=count, rating=rating, model=model, loras=chosen,
-                                    review=review, preset=preset or None)
+                                    review=review, preset=preset or None,
+                                    creative_spec=dict(must_keep=must_keep, may_change=may_change,
+                                                       change_only=change_only))
     return RedirectResponse(url=f'/jobs/{job_id}', status_code=303)
 
 
 @app.get('/jobs/{job_id}/artifacts/{name}/reuse', response_class=HTMLResponse)
 def reuse_artifact(request: Request, job_id: str, name: str):
-    row = db.job(job_id)
-    item = next((a for a in db.artifacts(job_id) if a['name'] == name), None)
-    if row is None or item is None or name.lower().endswith('.webm'):
-        raise HTTPException(status_code=404, detail='图片不存在')
-    params = dict(item.get('params') or row['params'])
-    from .image_models import MODELS, DEFAULT_MODEL
-    params.setdefault('model', row['params'].get('model', DEFAULT_MODEL))
-    spec = MODELS[params['model']]
-    size = next((key for key, value in spec['sizes'].items()
-                 if (value['width'], value['height']) == (params.get('width'), params.get('height'))), None)
-    if size is None:
-        raise HTTPException(status_code=422, detail='此图片尺寸不在文生图预设内，请使用原改图入口')
-    defaults = dict(spec['defaults'], **{k: v for k, v in params.items() if k != 'size'})
-    # 产物级参数里的 LoRA 只有文件与强度；选择要按任务级记录（带 id）回填
-    defaults.update(size=size, prompt=item['prompt'], seed=item['seed'],
-                    loras=[{'id': l['id'], 'strength': l['strength']}
-                           for l in row['params'].get('loras') or []])
-    return TEMPLATES.TemplateResponse(request, 'image.html', image_context(defaults))
+    recipe = api.artifact_reuse(job_id, name)
+    query = urlencode({'source_job': job_id, 'source_name': name})
+    return RedirectResponse(recipe['page'] + '?' + query, status_code=303)
+
+
+@app.get('/gallery/{item_id}/reuse')
+def reuse_gallery(item_id: int):
+    item = db.gallery_item(item_id)
+    if item is not None and item.get('source_job'):
+        source = next((a for a in db.artifacts(item['source_job']) if a['sha256'] == item['sha256']), None)
+        if source is not None:
+            return RedirectResponse(f'/jobs/{item["source_job"]}/artifacts/{source["name"]}/reuse', status_code=303)
+    raise HTTPException(status_code=404, detail='原任务记录已不存在，无法完整回填生成设置')

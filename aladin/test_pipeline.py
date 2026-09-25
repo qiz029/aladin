@@ -31,10 +31,9 @@ import modal.exception as modal_exception  # noqa: E402
 PARAMS = {'images': 1, 'seed': 1, 'width': 1024, 'height': 1024, 'steps': 8,
           'cfg': 1.0, 'sampler': 'euler', 'scheduler': 'simple', 'negative': ''}
 # 视频请求用的参数字典（web/api 校验后就是这个形状）
-VIDEO_PARAMS = {'negative': '', 'duration': 'short', 'size': 'landscape',
-                'width': 832, 'height': 480, 'frames': 56, 'fps': 24, 'seconds': 2.33,
-                'steps': 4, 'cfg': 1.0, 'shift': 8.0, 'sampler': 'euler',
-                'scheduler': 'simple', 'seed': 0, 'loraStrength': 1.0, 'images': 1}
+VIDEO_PARAMS = {'model': 'ltx-2.3', 'duration': 'short', 'size': 'landscape',
+                'width': 1024, 'height': 576, 'frames': 49, 'fps': 24, 'seconds': 2.04,
+                'seed': 0, 'images': 1}
 
 
 class OutputExpiredError(Exception):
@@ -115,8 +114,11 @@ class PipelineTest(unittest.TestCase):
                 self.assertEqual(function.spawn.call_args.args[0]['modelId'], model)
 
     def test_target_routes_each_app_to_its_own_modal_app_and_volume(self):
-        self.assertEqual(pipeline._target('video')[:2],
-                         (settings.APP_VIDEO, settings.FUNCTION_VIDEO))
+        self.assertEqual(pipeline._target('video', 'ltx-2.3')[:2],
+                         ('aladin-video-ltx23-v1', settings.FUNCTION_VIDEO))
+        self.assertEqual(pipeline._target('video', 'ltx-2.5')[0], 'aladin-video-ltx25-v1')
+        # 没记模型的视频任务落到默认模型
+        self.assertEqual(pipeline._target('video')[0], 'aladin-video-ltx25-v1')
         self.assertEqual(pipeline._target('video')[2:],
                          (settings.VOLUME_RESULTS_VIDEO, 'videos'))
         self.assertEqual(pipeline._target('image')[:2],
@@ -126,15 +128,16 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline._target('')[:2],
                          (settings.APP_IMAGE, settings.FUNCTION_IMAGE))
 
-    def test_enqueue_video_builds_an_h3_request(self):
+    def test_enqueue_video_builds_an_ltx_request(self):
         job_id = pipeline.enqueue('clouds drift', 1, dict(VIDEO_PARAMS), mode='i2v',
                                   input_sha256='b' * 64, input_path='uploads/x.png',
                                   app='video')
         row = db.job(job_id)
         self.assertEqual((row['app'], row['mode']), ('video', 'i2v'))
-        self.assertEqual(row['request']['model'], '10eros-max-h3-turbo-beta5')
-        self.assertEqual(row['request']['frames'], 56)
-        self.assertEqual(row['request']['width'], 832)
+        self.assertEqual(row['request']['model'], 'ltx-2.3')
+        self.assertEqual(row['request']['frames'], 49)
+        self.assertEqual(row['request']['width'], 1024)
+        self.assertEqual(row['request']['loras'], [])
         self.assertEqual(row['image_count'], 1, '账本只有一列 image_count，视频记 1')
 
     def test_video_download_reads_the_video_volume_and_records_the_artifact(self):

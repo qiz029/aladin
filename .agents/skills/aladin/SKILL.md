@@ -1,6 +1,6 @@
 ---
 name: aladin
-description: Generate images, make img2img variations, apply instruction-based edits, or animate a still image into a short video (10Eros-Max / MiniMax-H3 image-to-video) through the local aladin service running on the workstation, then download the resulting PNGs/webm. Use when asked to generate, draw, edit, or restyle an image, or to animate/turn a picture into a clip, with a local GPU service; when the user mentions aladin, 文生图, 图生图, 指令编辑, 图生视频, Qwen-Image, 10Eros-Max, or 工作站生图; or when media is needed without an external API key.
+description: Generate images, make img2img variations, apply instruction-based edits, or animate a still image into a short video (LTX-2.5 / LTX-2.3 image-to-video with audio and LoRAs) through the local aladin service running on the workstation, then download the resulting PNGs/webm. Use when asked to generate, draw, edit, or restyle an image, or to animate/turn a picture into a clip, with a local GPU service; when the user mentions aladin, 文生图, 图生图, 指令编辑, 图生视频, Qwen-Image, LTX, or 工作站生图; or when media is needed without an external API key.
 ---
 
 # aladin
@@ -40,7 +40,7 @@ file aladin-out/4d65cf27121640ca82d059d20c65c52b/image-01.png
 | `jobs --limit 10 [--state succeeded]` | 任务列表 |
 | `delete <job_id>` | 删除已结束的任务及本地产物（收藏副本保留；进行中返回 409） |
 | `gallery` / `gallery --add JOB NAME` / `gallery --remove ID` | 图库 |
-| `video --image in.jpg --prompt "云慢慢飘过" --duration normal --wait` | 图生视频（起始图必给；产物是 webm） |
+| `video --image in.jpg --prompt "云慢慢飘过" --model ltx-2.5 --duration normal --wait` | 图生视频（起始图必给；产物是有声 webm；`--lora ID[:强度]` 可叠加） |
 | `params` | 参数边界、尺寸预设、默认值（含视频档位） |
 | `billing` | Modal 账单快照：本期开销、credits 抵扣、余额估算 |
 
@@ -59,9 +59,10 @@ file aladin-out/4d65cf27121640ca82d059d20c65c52b/image-01.png
 - **CFG 按模型选择**：Qwen 默认 1.0；Anima Base 1.0 默认 4.5；Pony Realism 2.2 默认 6.5。省略参数即使用该模型默认值。
 - **图库与任务历史有页面**，给人看的：`/jobs`、`/gallery`（图片和视频都能长期收藏）。
 - **图生视频是另一个切片**：Modal app 不同、产物 Volume 不同，但任务/接口形状一致。
-  10Eros-Max beta5 Turbo 联合生成视频和音频；冷启动与生成耗时以实际任务为准。
-  帧率固定 24fps，时长为 short 2.3s / normal 5.2s / long 8s。
-  提示词描述**运动**即可，画面内容由起始图决定；视频没有 `images` 概念，一次一条。
+  两套模型各自一个 app：`ltx-2.5`（默认，画质与提示词理解更好）与 `ltx-2.3`（NSFW LoRA 生态更全）。
+  都联合生成视频和音频；冷启动与生成耗时以实际任务为准。
+  帧率固定 24fps，时长为 short 2s / normal 5s / long 8s。
+  提示词描述**动作、镜头和声音**即可，画面内容由起始图决定；视频没有 `images` 概念，一次一条。
 
 ## 直接用 HTTP
 
@@ -73,10 +74,10 @@ curl -s -X POST "$ALADIN_URL/api/v1/images?wait=true&timeout=300" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"a brass compass on aged paper","size":"square","steps":20}'
 
-# 图生视频：JSON + base64 起始图，产物是 webm（默认约 5.2 秒 / 24fps）
+# 图生视频：JSON + base64 起始图，产物是有声 webm（默认 5 秒 / 24fps）
 curl -s -X POST "$ALADIN_URL/api/v1/videos/base64?wait=true&timeout=900" \
   -H 'Content-Type: application/json' \
-  -d "{\"image_base64\":\"$(base64 -i in.jpg)\",\"prompt\":\"clouds drift slowly\",\"duration\":\"short\"}"
+  -d "{\"image_base64\":\"$(base64 -i in.jpg)\",\"prompt\":\"clouds drift slowly\",\"model\":\"ltx-2.5\",\"duration\":\"short\"}"
 
 # 改图：JSON + base64（图片最多 8 MiB）
 curl -s -X POST "$ALADIN_URL/api/v1/edits/base64?wait=true" \
@@ -104,11 +105,13 @@ CLI 下载产物时同时保存 `generation.json`，不要只交付 PNG 而丢�
 
 ## 视频模型参数
 
-视频后端为 `TenStrip/10Eros-Max` beta5 Turbo INT8，作者标注 NSFW capable。
-24fps，帧数按 17n+5；时长档位为 56 / 124 / 192 帧。默认 6 步、CFG 1、Shift 12、res_multistep/simple。
-输出保留 WebM，并包含模型生成的音频。提示词可描述动作、环境音与音乐。
-`lora_strength` 为旧 API 兼容字段，只允许 1.0；Turbo 已融合，不能再叠加旧 Wan 蒸馏 LoRA。
-CFG=1 时只使用正向条件；负向提示词在 CFG 不等于 1 时才参与计算。HD 档仍标为未实测。
+两套都按 Comfy 官方 distilled 模板跑：半分辨率 8 步 → 潜空间 2× 放大 → 3 步精修，CFG 1，
+步数 / 采样器 / 负向词固定不开放。24fps，帧数 8n+1；时长档位为 49 / 121 / 193 帧。
+- `ltx-2.5`：`Lightricks/LTX-2.5` distilled int8 + Gemma 4 12B 文本编码器。
+- `ltx-2.3`：`Lightricks/LTX-2.3-fp8` dev + 0.5 distilled LoRA（官方模板做法）+ Gemma 3。
+LoRA 按模型分族（`GET /api/v1/loras` 里 family 为 `ltx25` / `ltx23`），跨模型会被 422 挡住；
+触发词由服务端补到提示词末尾。`ltx23-sulphur` 是 Sulphur 2 NSFW 微调的 LoRA 形式（10GB）。
+输出 WebM，并包含模型生成的音频。HD 档仍标为未实测。
 
 ## 文生图模型选择
 
@@ -140,13 +143,25 @@ CLI 对应 `--rating`。服务端按模型把尺度换成该模型认的词，**
 | Qwen-Image（文生图、改图、一句话出图） | 结尾 | 无 | sensual, suggestive | nsfw, explicit, uncensored |
 | Anima Base | 开头 | safe | sensitive | explicit |
 | Pony Realism | 开头 | rating_safe | rating_questionable | rating_explicit |
-| 10Eros-Max 视频 | 结尾 | 无 | sensual, suggestive | nsfw, explicit, uncensored |
+| LTX 视频 | 结尾 | 无 | sensual, suggestive | nsfw, explicit, uncensored |
 
 实时的表以 `GET /api/v1/params` 的 `prompt_defaults` 为准。提示词里已有的词大小写不敏感去重；负向词不变。
 任务 `params.prompt_defaults` 保存 original / effective / tags / rating / family，任务页可展开看实际发送的内容；
 「再来一张」沿用原任务的配置。尺度参与幂等键：同提示词换尺度是新任务。加上标签后超过 2000 字符会被拒绝，不截断。
 
 ## 一句话出图：选模型、LoRA、先看计划
+
+可选 `creative_spec`：`{"must_keep":"蓝色外套", "may_change":"背景", "change_only":"傍晚暖光"}`。
+每项字符串最多 1000 字符；空项忽略。要求参与任务幂等键，保存在 `params.creative_spec` 与规划请求里，
+planner 对每张图应用并在 rationale 中说明。CLI 对应 `--must-keep` / `--may-change` / `--change-only`。
+这是规划约束，不是已经通过的视觉验收。人工评审可增加 `requirements: {"must_keep":"pass"}`，
+键对应上述三项，值为 pass / fail / unsure；不能把 agent 判断写成人工评审。
+
+`GET /api/v1/jobs/{id}/artifacts/{name}/reuse` 返回单张图片的 `settings`、`page`、`mode`、`input_url`。
+文生图的 settings 可作为 `/images` 请求基础；改图需另外下载 input_url（原始输入图）、编码为 image_base64，
+再提交 `/edits/base64`。默认 images=1，seed 使用所选图片的实际值。接口只读取，不触发生成。
+网页图片预览与任务卡片的「用相同设置创作」使用同一逻辑；缺失的原输入图或不再可用的模型 / LoRA 会报错。
+收藏只有在来源任务仍存在时能恢复完整设置。
 
 `POST /api/v1/director` 除 `brief` / `count` / `rating` 外还接受：
 - `model`：`qwen-image-2.1`（默认）/ `pony-realism-2.2` / `anima-base-1.0`。planner 按目标模型的写法写提示词

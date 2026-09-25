@@ -1,0 +1,11 @@
+<div class="field">
+  <p>已载入 <a href="/jobs/{{ reuse.source_job }}">{{ reuse.source_name }}</a> 的生成设置与种子。修改后即可继续创作，每次默认生成 1 张。</p>
+  {% if reuse.creative_spec %}
+  <details><summary>原任务的创作要求</summary>
+    {% for key, label in [('must_keep', '必须保持'), ('may_change', '允许变化'), ('change_only', '本轮只改')] %}
+    {% if reuse.creative_spec.get(key) %}<p style="white-space:pre-wrap"><strong>{{ label }}：</strong>{{ reuse.creative_spec[key] }}</p>{% endif %}
+    {% endfor %}
+    <p class="small muted">本页直接使用提示词生成；调整要求时，请把相应修改写入提示词。</p>
+  </details>
+  {% endif %}
+</div>

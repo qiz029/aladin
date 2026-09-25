@@ -13,6 +13,15 @@
   <p class="err small mt-2" id="error" {% if not job.error or job.state != 'failed' %}style="display:none"{% endif %}>{{ job.error or '' }}</p>
   <details><summary>查看运行记录</summary><pre class="log" id="log"></pre></details>
 </div>
+{% if job.params.creative_spec %}
+<div class="panel">
+  <h2>本次创作要求</h2>
+  {% for key, label in [('must_keep', '必须保持'), ('may_change', '允许变化'), ('change_only', '本轮只改')] %}
+  {% if job.params.creative_spec.get(key) %}<p><strong>{{ label }}</strong></p><p style="white-space:pre-wrap">{{ job.params.creative_spec[key] }}</p>{% endif %}
+  {% endfor %}
+  <p class="small muted">规划说明供核对；生成后可在「并排比较与人工评审」中逐项检查结果。</p>
+</div>
+{% endif %}
 {% macro manga_story(plan) %}
 <div class="manga-story">
   <h3>{{ plan.story.title or '（无标题）' }}</h3>
@@ -210,7 +219,7 @@ document.getElementById('approvePlan').addEventListener('click', async event => 
       <div class="actions">
         <a class="btn btn-ghost sm" href="/apps/edit?source=/jobs/{{ job.id }}/artifacts/{{ item.name }}">局部修复</a>
         <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}" download>下载</a>
-        {% if job.mode in ['txt2img', 'director'] %}<a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}/reuse">用这套参数微调</a>{% endif %}
+        <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}/reuse">用相同设置创作</a>
         {% if item.kind != 'video' and item.sha256 in job.gallery %}
         <button class="ghost sm" disabled>已在收藏</button>
         {% else %}

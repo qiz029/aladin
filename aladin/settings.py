@@ -41,8 +41,7 @@ APP_IMAGE = 'aladin-image-v1'
 FUNCTION_IMAGE = 'generate'
 VOLUME_MODELS = 'agent-media-lab-gpu-models-v1'
 VOLUME_RESULTS = 'aladin-image-results-v1'
-# 视频切片：独立 Modal app 与独立 Volume（见 aladin_video_modal_app.py）
-APP_VIDEO = 'aladin-video-h3-v1'
+# 视频切片：每个模型一个 Modal app（名字在 video_worker.MODELS），产物 Volume 共用
 FUNCTION_VIDEO = 'generate'
 VOLUME_RESULTS_VIDEO = 'aladin-video-results-v1'
 # 账单展示：worker 每 BILLING_REFRESH_SECONDS 秒拉一次 Modal 账单写快照表。
@@ -88,36 +87,29 @@ DEFAULT_PARAMS = {
 }
 
 
-# ── 视频（10Eros-Max / MiniMax-H3）─────────────────────────────────────────
-# H3 按 24fps 生成，帧数必须为 17n+5，尺寸为 32 的倍数。
+# ── 视频（LTX-2.3 / LTX-2.5，各自一个 Modal app，见 aladin_video_modal_app.py）────
+# 24fps，帧数 8n+1；第一段在半分辨率上跑，所以宽高取 64 的倍数。
 VIDEO_FPS = 24
 VIDEO_DURATIONS = {
-    'short': {'label': '2.3 秒', 'hint': '56 帧', 'frames': 56},
-    'normal': {'label': '5.2 秒', 'hint': '124 帧', 'frames': 124},
-    'long': {'label': '8 秒', 'hint': '192 帧', 'frames': 192},
+    'short': {'label': '2 秒', 'hint': '49 帧', 'frames': 49},
+    'normal': {'label': '5 秒', 'hint': '121 帧', 'frames': 121},
+    'long': {'label': '8 秒', 'hint': '193 帧', 'frames': 193},
 }
 VIDEO_SIZES = {
-    'landscape': {'label': '横版', 'hint': '832×480', 'width': 832, 'height': 480},
-    'portrait': {'label': '竖版', 'hint': '480×832', 'width': 480, 'height': 832},
-    'landscape-hd': {'label': '横版 HD', 'hint': '1280×736（未实测）',
-                     'width': 1280, 'height': 736},
-    'portrait-hd': {'label': '竖版 HD', 'hint': '736×1280（未实测）',
-                    'width': 736, 'height': 1280},
+    'landscape': {'label': '横版', 'hint': '1024×576', 'width': 1024, 'height': 576},
+    'portrait': {'label': '竖版', 'hint': '576×1024', 'width': 576, 'height': 1024},
+    'landscape-hd': {'label': '横版 HD', 'hint': '1280×704（未实测）',
+                     'width': 1280, 'height': 704},
+    'portrait-hd': {'label': '竖版 HD', 'hint': '704×1280（未实测）',
+                    'width': 704, 'height': 1280},
 }
 VIDEO_LIMITS = {
-    'prompt_chars': 2000, 'negative_chars': 2000,
-    'frames': (22, 192), 'size': (256, 1344), 'size_multiple': 32,
-    'steps': (1, 40), 'cfg': (0.0, 10.0), 'shift': (0.01, 20.0),
-    # 旧 API 字段保留，只允许中性值；Turbo 加速已融合在 checkpoint 中。
-    'lora_strength': (1.0, 1.0), 'seed': (0, 2 ** 63 - 1),
+    'prompt_chars': 2000, 'frames': (9, 257), 'size': (256, 1920), 'size_multiple': 64,
+    'seed': (0, 2 ** 63 - 1),
 }
 VIDEO_DEFAULT_PARAMS = {
-    'negative': '', 'duration': 'normal', 'size': 'landscape',
-    'steps': 6, 'cfg': 1.0, 'shift': 12.0, 'sampler': 'res_multistep',
-    'scheduler': 'simple', 'seed': None, 'loraStrength': 1.0,
+    'model': 'ltx-2.5', 'duration': 'normal', 'size': 'landscape', 'seed': None, 'loras': [],
 }
-VIDEO_SAMPLERS = ('euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_2m_sde', 'uni_pc',
-                  'res_multistep', 'er_sde', 'lcm')
 
 
 def ensure_dirs() -> None:

@@ -1,4 +1,4 @@
-// LoRA 面板：只在 Pony / Anima 下出现。选择序列化成 [{id, strength}] 写进隐藏字段 loras，
+// LoRA 面板：生图（Pony / Anima）与视频（LTX-2.3 / LTX-2.5）共用，按 #model 所属的族过滤。选择序列化成 [{id, strength}] 写进隐藏字段 loras，
 // 与 API 的 loras 字段同形；校验、触发词补充都在服务端（aladin/loras.py），这里只负责选与提示。
 (() => {
   const panel = document.getElementById('loraPanel');

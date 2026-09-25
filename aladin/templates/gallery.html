@@ -50,6 +50,7 @@
     <a href="/gallery/{{ item.id }}/file" target="_blank"
        aria-label="预览收藏：{{ item.prompt }}" data-lightbox data-kind="{{ item.kind }}"
        data-src="/gallery/{{ item.id }}/file"
+       {% if item.kind == 'image' and item.source_job %}data-reuse="/gallery/{{ item.id }}/reuse"{% endif %}
        data-title="{{ item.prompt }}"
        data-download="/gallery/{{ item.id }}/download">
       {% if item.kind == 'video' %}
@@ -73,6 +74,7 @@
       </div>
       <div class="actions">
         <a class="btn btn-ghost sm" href="/gallery/{{ item.id }}/download">下载</a>
+        {% if item.kind == 'image' and item.source_job %}<a class="btn btn-ghost sm" href="/gallery/{{ item.id }}/reuse">用相同设置创作</a>{% endif %}
         <button class="ghost sm" onclick="removeItem({{ item.id }}, this)">移除</button>
       </div>
     </div>

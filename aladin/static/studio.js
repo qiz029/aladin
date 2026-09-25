@@ -40,6 +40,12 @@
     jobLink.hidden = !trigger.dataset.job;
     jobLink.href = trigger.dataset.job || '#';
     document.getElementById('lightboxDownload').href = trigger.dataset.download || trigger.dataset.src;
+    const reuseLink = document.getElementById('lightboxReuse');
+    const source = trigger.dataset.src || '';
+    const reusable = trigger.dataset.kind !== 'video' && /^\/jobs\/[a-f0-9]{32}\/artifacts\/[\w.-]+\.(png|jpe?g)$/.test(source);
+    const reuseUrl = trigger.dataset.reuse || (reusable ? source + '/reuse' : '');
+    reuseLink.hidden = !reuseUrl;
+    reuseLink.href = reuseUrl || '#';
     box.hidden = false;
     document.body.style.overflow = 'hidden';
     document.querySelector('.sidebar').inert = true;
