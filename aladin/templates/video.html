@@ -22,6 +22,7 @@
         <div class="upload-input">
           <input type="file" id="file" name="file" data-preview="preview" data-max-bytes="{{ max_mb * 1048576 }}" accept="image/png,image/jpeg" required>
           <div class="small muted">画面内容由这张图决定；提示词可描述运动、镜头和声音。</div>
+          <div class="small muted" id="sourceStatus" role="status"></div>
         </div>
       </div>
     </div>
@@ -116,4 +117,5 @@
 </div>
 {% endif %}
 <script src="/static/lora.js?v=20260924e" defer></script>
+<script src="/static/video-source.js?v=20260924a" defer></script>
 {% endblock %}

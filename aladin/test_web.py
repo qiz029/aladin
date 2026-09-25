@@ -89,6 +89,7 @@ class WebTest(unittest.TestCase):
         page = self.client.get(f'/jobs/{job_id}/compare')
         self.assertEqual(page.status_code, 200)
         self.assertIn('left wrist disconnected', page.text)
+        self.assertIn('class="video-link"', page.text)
         self.assertEqual(self.client.put(path, json=dict(body, anatomy='perfect')).status_code, 422)
         self.assertEqual(self.client.get(f'/jobs/{job_id}/compare?other=missing').status_code, 404)
         suite = self.client.get('/api/v1/benchmarks/people').json()
@@ -186,6 +187,8 @@ class WebTest(unittest.TestCase):
         page = self.client.get(f'/jobs/{job_id}')
         self.assertEqual(page.status_code, 200)
         self.assertIn('a teapot', page.text)
+        # 生成的图片可以直接拿去做视频
+        self.assertIn(f'/apps/video?source=/jobs/{job_id}/artifacts/image-01.png', page.text)
 
         state = self.client.get(f'/jobs/{job_id}/state').json()
         self.assertEqual(state['state'], 'succeeded')
@@ -685,6 +688,13 @@ class VideoAppTest(unittest.TestCase):
         for marker in ('起始图', '提示词', '时长', '尺寸', '开始生成', '高级参数'):
             self.assertIn(marker, response.text)
 
+    def test_page_loads_the_source_prefill(self):
+        page = self.client.get('/apps/video?source=/gallery/1/file').text
+        self.assertIn('/static/video-source.js', page)
+        self.assertIn('id="sourceStatus"', page)
+        # 灯箱（收藏页等）里也有入口，由 studio.js 按图片地址显示
+        self.assertIn('id="lightboxVideo"', page)
+
     def test_index_lists_the_video_app(self):
         self.assertIn('生成视频', self.client.get('/').text)
 
@@ -753,6 +763,8 @@ class VideoAppTest(unittest.TestCase):
         self.assertIn('MiB', response.text, '视频下载按钮要标出体积')
         # 视频现在也能长期保留：任务页要有「加入收藏」而不是只让下载
         self.assertIn('加入收藏', response.text)
+        # 视频产物本身不再给「生成视频」入口
+        self.assertNotIn('/apps/video?source=', response.text)
 
     def test_video_artifact_served_as_webm(self):
         self._post(seed=21)

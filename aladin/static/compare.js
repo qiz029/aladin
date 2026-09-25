@@ -28,6 +28,7 @@
     side.querySelector('.reuse-link').href = `/jobs/${item.job.id}/artifacts/${item.name}/reuse`;
     side.querySelector('.review-status').textContent = review.updated_at ? '已保存人工评审' : '尚未评审';
     side.querySelector('.repair-link').href = '/apps/edit?source=' + encodeURIComponent(`/jobs/${item.job.id}/artifacts/${item.name}`);
+    side.querySelector('.video-link').href = '/apps/video?source=' + encodeURIComponent(`/jobs/${item.job.id}/artifacts/${item.name}`);
   }
   sides.forEach((side,index) => {
     const selector = side.querySelector('.candidate');

@@ -46,6 +46,11 @@
     const reuseUrl = trigger.dataset.reuse || (reusable ? source + '/reuse' : '');
     reuseLink.hidden = !reuseUrl;
     reuseLink.href = reuseUrl || '#';
+    // 任务里的图片和收藏里的图片都能直接作为视频起始图
+    const videoLink = document.getElementById('lightboxVideo');
+    const animatable = trigger.dataset.kind !== 'video' && (reusable || /^\/gallery\/\d+\/file$/.test(source));
+    videoLink.hidden = !animatable;
+    videoLink.href = animatable ? '/apps/video?source=' + encodeURIComponent(source) : '#';
     box.hidden = false;
     document.body.style.overflow = 'hidden';
     document.querySelector('.sidebar').inert = true;

@@ -218,6 +218,7 @@ document.getElementById('approvePlan').addEventListener('click', async event => 
       </details>
       <div class="actions">
         <a class="btn btn-ghost sm" href="/apps/edit?source=/jobs/{{ job.id }}/artifacts/{{ item.name }}">局部修复</a>
+        <a class="btn btn-ghost sm" href="/apps/video?source=/jobs/{{ job.id }}/artifacts/{{ item.name }}">生成视频</a>
         <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}" download>下载</a>
         <a class="btn btn-ghost sm" href="/jobs/{{ job.id }}/artifacts/{{ item.name }}/reuse">用相同设置创作</a>
         {% if item.kind != 'video' and item.sha256 in job.gallery %}
