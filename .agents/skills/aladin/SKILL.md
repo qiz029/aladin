@@ -61,7 +61,8 @@ file aladin-out/4d65cf27121640ca82d059d20c65c52b/image-01.png
 - **图生视频是另一个切片**：Modal app 不同、产物 Volume 不同，但任务/接口形状一致。
   两套模型各自一个 app：`ltx-2.5`（默认，画质与提示词理解更好）与 `ltx-2.3`（NSFW LoRA 生态更全）。
   都联合生成视频和音频；冷启动与生成耗时以实际任务为准。
-  帧率固定 24fps，时长为 short 2s / normal 5s / long 8s。
+  帧率固定 24fps，时长为 short 2s / normal 5s / long 8s / extended 12s / max 20s；
+  20 秒在 L40S 上约 3–5 分钟，越长细节越容易偏离起始图。
   提示词描述**动作、镜头和声音**即可，画面内容由起始图决定；视频没有 `images` 概念，一次一条。
 
 ## 直接用 HTTP
@@ -106,7 +107,7 @@ CLI 下载产物时同时保存 `generation.json`，不要只交付 PNG 而丢�
 ## 视频模型参数
 
 两套都按 Comfy 官方 distilled 模板跑：半分辨率 8 步 → 潜空间 2× 放大 → 3 步精修，CFG 1，
-步数 / 采样器 / 负向词固定不开放。24fps，帧数 8n+1；时长档位为 49 / 121 / 193 帧。
+步数 / 采样器 / 负向词固定不开放。24fps，帧数 8n+1；时长档位为 49 / 121 / 193 / 289 / 481 帧。
 - `ltx-2.5`：`Lightricks/LTX-2.5` distilled int8 + Gemma 4 12B 文本编码器。
 - `ltx-2.3`：`Lightricks/LTX-2.3-fp8` dev + 0.5 distilled LoRA（官方模板做法）+ Gemma 3。
 LoRA 按模型分族（`GET /api/v1/loras` 里 family 为 `ltx25` / `ltx23`），跨模型会被 422 挡住；

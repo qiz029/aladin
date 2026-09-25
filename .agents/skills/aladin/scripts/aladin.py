@@ -240,8 +240,9 @@ def main() -> int:
     video.add_argument('--prompt', default='', help='描述想要的动作、镜头与声音，可留空')
     video.add_argument('--model', default='ltx-2.5', choices=('ltx-2.5', 'ltx-2.3'),
                        help='ltx-2.5 画质更好 / ltx-2.3 NSFW LoRA 更多')
-    video.add_argument('--duration', default='normal', choices=('short', 'normal', 'long'),
-                       help='short 2s / normal 5s / long 8s')
+    video.add_argument('--duration', default='normal',
+                       choices=('short', 'normal', 'long', 'extended', 'max'),
+                       help='short 2s / normal 5s / long 8s / extended 12s / max 20s')
     video.add_argument('--size', default='landscape',
                        help='landscape / portrait / landscape-hd / portrait-hd')
     video.add_argument('--lora', action='append', default=[], metavar='ID[:STRENGTH]',

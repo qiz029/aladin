@@ -94,7 +94,7 @@ class VideoRequest(BaseModel):
     image_base64: str = Field(..., description='起始图的 base64（可含 data: 前缀）')
     prompt: str = Field('', description='描述想要的运动与声音，例如 "clouds drift, slow push in, wind noise"')
     model: str = Field('ltx-2.5', description='ltx-2.5（画质）/ ltx-2.3（NSFW LoRA 生态更全）')
-    duration: str = Field('normal', description='时长档位：short 2s / normal 5s / long 8s')
+    duration: str = Field('normal', description='时长档位：short 2s / normal 5s / long 8s / extended 12s / max 20s')
     size: str = Field('landscape', description='尺寸预设键，见 /api/v1/params 的 video.sizes')
     seed: int | None = Field(None, description='省略为随机；实际值写在返回任务的 params.seed')
     loras: list[LoraChoice] | None = Field(None, description='叠加的 LoRA，按 model 分族（见 GET /api/v1/loras），最多 6 个')

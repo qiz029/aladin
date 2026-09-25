@@ -89,7 +89,7 @@ DEFAULT_MODEL = 'ltx-2.5'
 MODEL = os.environ.get('ALADIN_VIDEO_MODEL', DEFAULT_MODEL)
 
 MAX_PROMPT = 2000
-MIN_FRAMES, MAX_FRAMES = 9, 257     # 8n+1
+MIN_FRAMES, MAX_FRAMES = 9, 481     # 8n+1；481 帧 = 20 秒（LTX-2.5 官方上限）
 FPS = 24
 # 第一段在半分辨率上采样，所以最终宽高要是 64 的倍数（半分辨率仍是 32 的倍数）
 SIZE_MIN, SIZE_MAX, SIZE_STEP = 256, 1920, 64

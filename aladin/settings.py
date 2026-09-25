@@ -94,6 +94,9 @@ VIDEO_DURATIONS = {
     'short': {'label': '2 秒', 'hint': '49 帧', 'frames': 49},
     'normal': {'label': '5 秒', 'hint': '121 帧', 'frames': 121},
     'long': {'label': '8 秒', 'hint': '193 帧', 'frames': 193},
+    # L40S 上 1024×576 实测：20 秒 2.5 约 4.5 分钟、2.3 约 3 分钟；越长细节越容易偏离起始图
+    'extended': {'label': '12 秒', 'hint': '289 帧', 'frames': 289},
+    'max': {'label': '20 秒', 'hint': '481 帧（HD 未实测）', 'frames': 481},
 }
 VIDEO_SIZES = {
     'landscape': {'label': '横版', 'hint': '1024×576', 'width': 1024, 'height': 576},
@@ -104,7 +107,7 @@ VIDEO_SIZES = {
                     'width': 704, 'height': 1280},
 }
 VIDEO_LIMITS = {
-    'prompt_chars': 2000, 'frames': (9, 257), 'size': (256, 1920), 'size_multiple': 64,
+    'prompt_chars': 2000, 'frames': (9, 481), 'size': (256, 1920), 'size_multiple': 64,
     'seed': (0, 2 ** 63 - 1),
 }
 VIDEO_DEFAULT_PARAMS = {
