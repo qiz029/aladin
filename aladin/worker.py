@@ -110,6 +110,73 @@ def atomic_json(path: Path, value) -> None:
         os.fsync(stream.fileno())
     os.replace(temporary, path)
 
+
+# 模块在容器里只导入一次：导入时刻近似容器（Python 进程）启动时刻，
+# 调用计数 > 0 说明这次复用了上一次的热容器。
+CONTAINER_STARTED = time.time()
+_CALLS = [0]
+
+
+class Timings:
+    """一次调用的分段耗时，写进 result.json 的 `timings`。
+
+    `mark(name)` 记下自上一个 mark 以来的秒数；`on_event` 接 ComfyUI 的 WebSocket
+    消息，按 `executing` 的节点切换算出每个节点的耗时（加载器 = 模型加载，
+    KSampler = 采样，VAEDecode = 解码）。时间都在容器内测，不受日志流批量到达的影响。
+    """
+
+    def __init__(self):
+        self.started = time.time()
+        self.call_index = _CALLS[0]
+        _CALLS[0] += 1
+        self.last = self.started
+        self.phases: dict = {}
+        self.nodes: list = []
+        self.classes: dict = {}
+        self.prompt_id = None
+        self._current = None
+        progress({'kind': 'container', 'at': round(self.started, 3),
+                  'callIndex': self.call_index,
+                  'containerStartedAt': round(CONTAINER_STARTED, 3)})
+
+    def mark(self, phase: str) -> None:
+        now = time.time()
+        self.phases[phase] = round(self.phases.get(phase, 0) + now - self.last, 2)
+        self.last = now
+
+    def watch(self, graph: dict, prompt_id: str) -> None:
+        self.classes = {node: spec.get('class_type') for node, spec in graph.items()}
+        self.prompt_id = prompt_id
+
+    def on_event(self, event: dict) -> None:
+        try:
+            data = event.get('data') or {}
+            if data.get('prompt_id') != self.prompt_id:
+                return
+            kind, now = event.get('type'), time.time()
+            if kind == 'executing' or kind in ('execution_success', 'execution_error'):
+                if self._current is not None:
+                    node, began = self._current
+                    self.nodes.append({'node': node, 'class': self.classes.get(node),
+                                       'seconds': round(now - began, 2)})
+                node = data.get('node') if kind == 'executing' else None
+                self._current = (node, now) if node is not None else None
+        except Exception:
+            pass
+
+    def record(self) -> dict:
+        return {'containerId': os.environ.get('MODAL_TASK_ID', ''),
+                'containerStartedAt': round(CONTAINER_STARTED, 3),
+                'callIndex': self.call_index,
+                'startedAt': round(self.started, 3), 'finishedAt': round(time.time(), 3),
+                'phases': self.phases, 'nodes': self.nodes}
+
+
+def done(record: dict) -> None:
+    """结果已提交到 Volume：宿主看到这一行就立刻去取结果，不必等下一轮轮询。"""
+    progress({'kind': 'done', 'at': round(time.time(), 3),
+              'elapsedSeconds': record.get('elapsedSeconds')})
+
 """观察容器内 ComfyUI 的采样进度，并转成容器 stdout 的结构化行。
 
 设计前提（均来自 ComfyUI 源码，非推测）：
@@ -723,10 +790,12 @@ def execute(request: dict, result_root: str, source: bytes = b'', commit=None) -
     """`commit` 是结果 Volume 的提交函数（由 Modal app 传入）；给了才会逐张回传。"""
     request = validate(json.loads(json.dumps(request)))
     started = time.time()
+    timings = Timings()
     mode = request.get('mode', 'txt2img')
     spec = MODELS[MODEL_FOR_MODE[mode]]
     root = Path('/models/qwen-image')
     ensure_weights(root, MODEL_FOR_MODE[mode])
+    timings.mark('weights')
     output = Path(result_root) / request['key']
     output.mkdir(parents=True, exist_ok=True)
     repair_state = None
@@ -742,8 +811,10 @@ def execute(request: dict, result_root: str, source: bytes = b'', commit=None) -
     if cached is not None:
         say('receipt hit; returning cached result')
         return cached
+    timings.mark('input')
 
     process, _log = start_server(root)
+    timings.mark('comfyBoot')
     try:
         graph = workflow(request)
         nodes = save_nodes(request)
@@ -783,12 +854,19 @@ def execute(request: dict, result_root: str, source: bytes = b'', commit=None) -
                                   if repair_state is not None else {})}}
 
         early = EarlyPublisher(prompt_id, nodes, store, commit)
+        timings.watch(graph, prompt_id)
+
+        def on_event(event: dict) -> None:
+            timings.on_event(event)
+            early.on_event(event)
+
         handle = watch_async(SERVER, prompt_id, mapping, timeout=1800.0,
-                             client_id=client_id, on_event=early.on_event)
+                             client_id=client_id, on_event=on_event)
         if not handle.ready.wait(timeout=30):
             raise RuntimeError('WebSocket 订阅未能在 30s 内建立')
         progress({'kind': 'queued', 'job_key': request['key']})
         submit(graph, client_id, prompt_id)
+        timings.mark('submit')
 
         history = wait_for_history(prompt_id, time.time() + 1500)
         if history is None:
@@ -796,6 +874,7 @@ def execute(request: dict, result_root: str, source: bytes = b'', commit=None) -
         entry = history[prompt_id]
         if entry.get('status', {}).get('status_str') == 'error':
             raise RuntimeError('ComfyUI 执行失败: ' + json.dumps(entry.get('status'))[:500])
+        timings.mark('execute')
 
         early.close()
         images = []
@@ -805,10 +884,12 @@ def execute(request: dict, result_root: str, source: bytes = b'', commit=None) -
                 continue
             item = entry['outputs'][node]['images'][0]
             images.append(store(index, item))
+        timings.mark('outputs')
         record = {'schemaVersion': 1, 'request': request, 'mode': mode,
                   'model': spec['repo'], 'quantization': spec['transformer'],
                   'elapsedSeconds': round(time.time() - started, 2),
-                  'images': images, 'serverLogTail': tail('/tmp/comfy-server.log', 8)}
+                  'images': images, 'serverLogTail': tail('/tmp/comfy-server.log', 8),
+                  'timings': timings.record()}
         atomic_json(output / 'result.json', record)
         return record
     except Exception as error:

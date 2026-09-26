@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import modal
+from psycopg.types.json import Jsonb
 
 import request as request_module
 
@@ -33,9 +34,12 @@ RECOVERY_INTERVAL = 30      # 秒；周期性清理中断的提交
 PURGE_INTERVAL = 60         # 秒；删除任务后清理 Modal 结果 Volume 上的副本
 PURGE_MAX_ATTEMPTS = 10
 TRANSIENT_BACKOFF = 30      # 秒；本机到 Modal 的连接抖动后多久再查
+DONE_BACKOFF = 2            # 秒；容器已报完成、返回值还没到时多久再查
 
 _WATCHERS: dict[str, threading.Thread] = {}
 _WATCH_LOCK = threading.Lock()
+# 已报 done 的 call_id：轮询看到它还没返回就短间隔重查，而不是退避到 15–60 秒
+_DONE: set[str] = set()
 
 
 def _target(app: str, model: str | None = None) -> tuple[str, str, str, str]:
@@ -298,6 +302,8 @@ def _poll_row(row: dict) -> str:
         result = call.get(timeout=0)
     except TimeoutError:
         backoff = POLL_BACKOFF[min(max(row['attempts'] - 1, 0), len(POLL_BACKOFF) - 1)]
+        if row['call_id'] in _DONE:
+            backoff = DONE_BACKOFF
         fields: dict[str, Any] = {'next_poll_at': _in(backoff),
                                   'lease_expires_at': _in(LEASE_SECONDS)}
         if state == 'submitted':
@@ -333,12 +339,15 @@ def _poll_row(row: dict) -> str:
             _fail(job_id, _short(error))
             return 'failed'
 
+    detected = time.time()
     try:
-        _download(job_id, row['result_key'],
-                  result if isinstance(result, dict) else {}, row.get('app') or 'image')
+        record = _download(job_id, row['result_key'],
+                           result if isinstance(result, dict) else {}, row.get('app') or 'image')
     except Exception as error:
         _fail(job_id, _short(error))
         return 'failed'
+    _DONE.discard(row['call_id'])
+    db.update_job(job_id, timings=Jsonb(_timings(record, detected)))
     db.finish_job(job_id, 'succeeded')
     db.add_event(job_id, 'succeeded', '完成')
     db.notify(job_id)
@@ -363,7 +372,9 @@ def _resolve_unknown_one() -> bool:
             db.add_event(job_id, 'warn', '规划回执暂不可用: ' + _short(error))
     elif _receipt_exists(row['result_key'], app):
         try:
-            _download(job_id, row['result_key'], {}, app)
+            detected = time.time()
+            record = _download(job_id, row['result_key'], {}, app)
+            db.update_job(job_id, timings=Jsonb(_timings(record, detected)))
             db.finish_job(job_id, 'succeeded')
             db.add_event(job_id, 'succeeded', '从 Volume 回执恢复')
             db.notify(job_id)
@@ -414,6 +425,9 @@ def _watch_loop(job_id: str, call: Any) -> None:
                 # 先落地再发事件：页面收到事件就去刷新产物区，这时账本里必须已经有这一张
                 _fetch_early(job_id, info)
                 dedupe = f"artifact:{getattr(call, 'object_id', '')}:{info.get('file')}"
+            elif info.get('kind') in ('container', 'done'):
+                _container_event(job_id, call, info)
+                continue
             elif info.get('kind') == 'queued':
                 dedupe = f"started:{getattr(call, 'object_id', '')}"
             elif info.get('kind') == 'step':
@@ -425,6 +439,34 @@ def _watch_loop(job_id: str, call: Any) -> None:
     except Exception as error:
         # 流断了只影响实时性（下次轮询会重开），但要留下痕迹，否则进度卡住时无从查起
         print(f'进度流中断 {job_id[:8]}: {_short(error)}', flush=True)
+
+
+def _container_event(job_id: str, call: Any, info: dict) -> None:
+    """容器开始 / 结束执行。时间以容器上报的为准（result.json 里也有），事件只给页面和排查看。"""
+    call_id = str(getattr(call, 'object_id', ''))
+    if info['kind'] == 'container':
+        index = info.get('callIndex')
+        reuse = '新容器' if index == 0 else f'复用容器（第 {index + 1} 次调用）'
+        added = db.add_event(job_id, 'container', '容器开始执行 · ' + reuse,
+                             dedupe_key='container:' + call_id)
+    else:
+        added = db.add_event(job_id, 'container_done',
+                             f"容器执行完毕 · {info.get('elapsedSeconds')} 秒",
+                             dedupe_key='done:' + call_id)
+        # 结果已提交到 Volume：让轮询马上来取，不再等 15–60 秒的退避
+        _DONE.add(call_id)
+        db.update_job(job_id, next_poll_at=_in(0))
+    if added:
+        db.notify(job_id)
+
+
+def _timings(record: dict, detected: float) -> dict:
+    """落进 jobs.timings 的汇总：容器内分段 + 宿主侧发现完成与下载的耗时。"""
+    record = record or {}
+    return {'v': 1, 'elapsedSeconds': record.get('elapsedSeconds'),
+            'container': record.get('timings'),
+            'detectedAt': round(detected, 3),
+            'downloadSeconds': round(time.time() - detected, 2)}
 
 
 def _to_unknown(job_id: str, reason: str) -> str:
@@ -451,15 +493,16 @@ def _receipt_exists(result_key: str, app: str = 'image') -> bool:
         return False
 
 
-def _download(job_id: str, result_key: str, record: dict, app: str = 'image') -> None:
-    """把 Volume 里的产物拉到本地。**Volume 的 result.json 是权威清单**。
+def _download(job_id: str, result_key: str, record: dict, app: str = 'image') -> dict:
+    """把 Volume 里的产物拉到本地。**Volume 的 result.json 是权威清单**，拉完返回它。
 
     容器返回值曾多次无法在本地反序列化（实测），所以先信 Volume，再退回返回值。
     图片清单在 `images`、视频在 `videos`，字段名由 _target() 给出。
     """
     _app_name, _function, volume_name, field = _target(app)
     volume = modal.Volume.from_name(volume_name)
-    images = _read_manifest(volume, result_key, field) or record.get(field) or []
+    manifest = _read_record(volume, result_key)
+    images = (manifest or {}).get(field) or record.get(field) or []
     directory = settings.JOBS_DIR / job_id
     directory.mkdir(parents=True, exist_ok=True)
     found = 0
@@ -481,6 +524,7 @@ def _download(job_id: str, result_key: str, record: dict, app: str = 'image') ->
         found += 1
     if found == 0:
         raise RuntimeError('任务已完成但没找到任何产物')
+    return manifest or record
 
 
 def _fetch_early(job_id: str, info: dict) -> bool:
@@ -516,15 +560,16 @@ def _fetch_early(job_id: str, info: dict) -> bool:
         return False
 
 
-def _read_manifest(volume: Any, result_key: str, field: str = 'images') -> list | None:
+def _read_record(volume: Any, result_key: str) -> dict | None:
     try:
         payload = _read_bytes(volume, f'{result_key}/result.json')
     except Exception:
         return None
     try:
-        return json.loads(payload).get(field)
+        value = json.loads(payload)
     except ValueError:
         return None
+    return value if isinstance(value, dict) else None
 
 
 def _read_bytes(volume: Any, path: str) -> bytes:

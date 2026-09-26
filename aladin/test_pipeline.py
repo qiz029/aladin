@@ -272,6 +272,51 @@ class PipelineTest(unittest.TestCase):
         steps = [e for e in db.events(job_id) if e['kind'] == 'progress']
         self.assertEqual(len(steps), 2, '同一调用的重放去重，新调用照常记录')
 
+    # --- 耗时采集 ------------------------------------------------------------
+
+    def _stream(self, job_id, call_id, *payloads):
+        call = FakeCall({})
+        call.object_id = call_id
+        lines = [types.SimpleNamespace(message='[aladin-progress] ' + json.dumps(p))
+                 for p in payloads]
+        call.logs = types.SimpleNamespace(stream=lambda timeout=None: iter(lines))
+        pipeline._watch_loop(job_id, call)
+
+    def test_container_lines_become_events_not_progress(self):
+        job_id = self._job(state='running', call_id='fc-t1')
+        for _ in range(2):      # 重开日志流会重放：去重后各只有一条
+            self._stream(job_id, 'fc-t1',
+                         {'kind': 'container', 'at': 1.0, 'callIndex': 1, 'containerStartedAt': 0.5},
+                         {'kind': 'done', 'at': 9.0, 'elapsedSeconds': 8.0})
+        kinds = [e['kind'] for e in db.events(job_id)]
+        self.assertEqual(kinds, ['container', 'container_done'])
+        self.assertIn('复用容器', db.events(job_id)[0]['message'])
+
+    def test_done_line_triggers_immediate_and_short_polls(self):
+        job_id = self._job(state='running', call_id='fc-t2', attempts=1,
+                           next_poll_at=datetime.now(timezone.utc) + timedelta(seconds=60))
+        self._stream(job_id, 'fc-t2', {'kind': 'done', 'at': 9.0, 'elapsedSeconds': 8.0})
+        self.assertLessEqual(db.job(job_id)['next_poll_at'], datetime.now(timezone.utc),
+                             '容器报完成后应立刻轮询')
+        # 返回值还没到：短间隔重查，不退避到 15 秒
+        pipeline.modal = fake_modal(call=FakeCall(TimeoutError()))
+        pipeline._poll_row(db.job(job_id))
+        delay = db.job(job_id)['next_poll_at'] - datetime.now(timezone.utc)
+        self.assertLessEqual(delay.total_seconds(), pipeline.DONE_BACKOFF)
+
+    def test_success_records_container_timings(self):
+        job_id = self._job(state='running', call_id='fc-t3')
+        container = {'callIndex': 0, 'startedAt': 100.0, 'finishedAt': 140.0,
+                     'phases': {'comfyBoot': 12.0, 'execute': 25.0}, 'nodes': []}
+        pipeline._download = lambda *a, **k: {'elapsedSeconds': 40.0, 'timings': container}
+        pipeline.modal = fake_modal(call=FakeCall({'key': 'k'}))
+
+        self.assertEqual(pipeline._poll_row(db.job(job_id)), 'succeeded')
+        timings = db.job(job_id)['timings']
+        self.assertEqual(timings['container'], container)
+        self.assertEqual(timings['elapsedSeconds'], 40.0)
+        self.assertIsNotNone(timings['downloadSeconds'])
+
     def test_early_artifact_is_fetched_verified_and_replay_safe(self):
         import hashlib
         job_id = self._job(state='running', call_id='fc-1')

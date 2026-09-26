@@ -260,6 +260,15 @@ uv --cache-dir .cache/uv run python -m unittest probe.test_watchdog
   `docker compose exec worker python -m aladin cleanup --days 30`）。带人工评审的任务不会被自动清理。
 - **Modal 结果 Volume 里的副本不会被删**（api 不持有 Modal 凭据）。同参数再提交会直接命中那里的回执。
 
+## 生成耗时
+
+每个成功任务的 `jobs.timings` 记着容器内的分段（权重检查、ComfyUI 启动、按节点归类的加载/采样/解码、
+写产物、是否复用热容器）和宿主侧的发现完成与下载耗时；提交、容器开始/结束等时刻在 `job_events` 里。
+
+- 报表：`docker compose exec worker python -m aladin timings [--since 2026-09-25] [--app image] [--limit 50]`，
+  逐任务列分段，末尾按 模型 × 冷热 给中位数/p90。各列含义见 `aladin/timings.py` 顶部。
+- 老任务只有 Volume 回执里的总耗时：`python -m aladin timings --backfill [--dry-run]` 一次性补上（需 Modal 凭据，在 worker 容器里跑）。
+
 ## 已知限制
 
 - 同参数（含显式种子）重复提交会被唯一约束拦住，这是有意的幂等保护；不填种子则每次随机。

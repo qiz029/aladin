@@ -127,6 +127,68 @@ def atomic_json(path: Path, value) -> None:
     os.replace(temporary, path)
 
 
+# 与 worker.py 的 Timings 同一份协议（本镜像只挂这一个文件，所以各留一份）：
+# 导入时刻近似容器启动时刻，调用计数 > 0 说明复用了热容器。
+CONTAINER_STARTED = time.time()
+_CALLS = [0]
+
+
+class Timings:
+    """一次调用的分段耗时，写进 result.json 的 `timings`；节点耗时来自 `executing` 切换。"""
+
+    def __init__(self):
+        self.started = time.time()
+        self.call_index = _CALLS[0]
+        _CALLS[0] += 1
+        self.last = self.started
+        self.phases: dict = {}
+        self.nodes: list = []
+        self.classes: dict = {}
+        self.prompt_id = None
+        self._current = None
+        progress({'kind': 'container', 'at': round(self.started, 3),
+                  'callIndex': self.call_index,
+                  'containerStartedAt': round(CONTAINER_STARTED, 3)})
+
+    def mark(self, phase: str) -> None:
+        now = time.time()
+        self.phases[phase] = round(self.phases.get(phase, 0) + now - self.last, 2)
+        self.last = now
+
+    def watch(self, graph: dict, prompt_id: str) -> None:
+        self.classes = {node: spec.get('class_type') for node, spec in graph.items()}
+        self.prompt_id = prompt_id
+
+    def on_event(self, event: dict) -> None:
+        try:
+            data = event.get('data') or {}
+            if data.get('prompt_id') != self.prompt_id:
+                return
+            kind, now = event.get('type'), time.time()
+            if kind == 'executing' or kind in ('execution_success', 'execution_error'):
+                if self._current is not None:
+                    node, began = self._current
+                    self.nodes.append({'node': node, 'class': self.classes.get(node),
+                                       'seconds': round(now - began, 2)})
+                node = data.get('node') if kind == 'executing' else None
+                self._current = (node, now) if node is not None else None
+        except Exception:
+            pass
+
+    def record(self) -> dict:
+        return {'containerId': os.environ.get('MODAL_TASK_ID', ''),
+                'containerStartedAt': round(CONTAINER_STARTED, 3),
+                'callIndex': self.call_index,
+                'startedAt': round(self.started, 3), 'finishedAt': round(time.time(), 3),
+                'phases': self.phases, 'nodes': self.nodes}
+
+
+def done(record: dict) -> None:
+    """结果已提交到 Volume：宿主看到这一行就立刻去取结果，不必等下一轮轮询。"""
+    progress({'kind': 'done', 'at': round(time.time(), 3),
+              'elapsedSeconds': record.get('elapsedSeconds')})
+
+
 # --- 采样进度观察 ----------------------------------------------------------
 
 def classify(graph: dict) -> dict:
@@ -176,7 +238,7 @@ class WatchHandle:
 
 
 def watch_async(server_url: str, prompt_id: str, mapping: dict,
-                timeout: float = 1800.0, client_id: str = '') -> WatchHandle:
+                timeout: float = 1800.0, client_id: str = '', on_event=None) -> WatchHandle:
     """订阅 ComfyUI 的 WebSocket，把属于本任务的采样进度转成结构化 stdout 行。"""
     try:
         import websocket  # websocket-client
@@ -198,6 +260,8 @@ def watch_async(server_url: str, prompt_id: str, mapping: dict,
             return
         kind = event.get('type') if isinstance(event, dict) else None
         handle.counts[kind] = handle.counts.get(kind, 0) + 1
+        if on_event is not None and isinstance(event, dict):
+            on_event(event)
         info = progress_info(event, prompt_id, mapping)
         if info is None:
             return
@@ -640,9 +704,11 @@ SERVER = 'http://127.0.0.1:8188'
 def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
     request = validate(json.loads(json.dumps(request)), MODEL)
     started = time.time()
+    timings = Timings()
     spec = MODELS[request['model']]
     ensure_weights(request['model'], ROOT)
     ensure_loras(request.get('loras', []), ROOT)
+    timings.mark('weights')
     output = Path(result_root) / request['key']
     output.mkdir(parents=True, exist_ok=True)
     # 文件名由哈希决定，每次运行一致。必须在回执比对之前算好：它会被写进
@@ -653,18 +719,22 @@ def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
     if hit is not None:
         say('receipt hit; returning cached result')
         return hit
+    timings.mark('input')
 
     process, _log = start_server(ROOT)
+    timings.mark('comfyBoot')
     try:
         graph = workflow(request)
         client_id = 'aladin-' + request['key'][:16]
         prompt_id = str(uuid.uuid4())          # ComfyUI 只接受规范 UUID
+        timings.watch(graph, prompt_id)
         handle = watch_async(SERVER, prompt_id, classify(graph), timeout=2400.0,
-                             client_id=client_id)
+                             client_id=client_id, on_event=timings.on_event)
         if not handle.ready.wait(timeout=30):
             raise RuntimeError('WebSocket 订阅未能在 30s 内建立')
         progress({'kind': 'queued', 'job_key': request['key']})
         submit(graph, client_id, prompt_id)
+        timings.mark('submit')
 
         history = wait_for_history(prompt_id, time.time() + 2400)
         if history is None:
@@ -672,6 +742,7 @@ def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
         entry = history[prompt_id]
         if entry.get('status', {}).get('status_str') == 'error':
             raise RuntimeError('ComfyUI 执行失败: ' + json.dumps(entry.get('status'))[:500])
+        timings.mark('execute')
 
         prefix = 'aladin-' + request['key'][:12]
         data = fetch_video(prefix, time.time() + 300)
@@ -681,6 +752,7 @@ def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
         temporary = output / (name + '.tmp')
         temporary.write_bytes(data)
         temporary.replace(output / name)
+        timings.mark('outputs')
         elapsed = round(time.time() - started, 2)
         record = {'schemaVersion': 1, 'request': request, 'model': spec['repo'],
                   'elapsedSeconds': elapsed,
@@ -691,7 +763,8 @@ def execute(request: dict, result_root: str, source: bytes = b'') -> dict:
                               'prompt': request['prompt'], 'seed': request['seed']}],
                   # LoRA 键对不上时 ComfyUI 只打警告不报错（2.3 的 LoRA 用在 2.5 上尤其要看这里）
                   'loraWarnings': lora_warnings('/tmp/comfy-server.log'),
-                  'serverLogTail': tail('/tmp/comfy-server.log', 8)}
+                  'serverLogTail': tail('/tmp/comfy-server.log', 8),
+                  'timings': timings.record()}
         atomic_json(output / 'result.json', record)
         progress({'kind': 'encoded', 'bytes': len(data), 'seconds': elapsed})
         return record

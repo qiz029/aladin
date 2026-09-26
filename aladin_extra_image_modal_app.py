@@ -30,10 +30,12 @@ def prepare_models():
               startup_timeout=1200, retries=0, min_containers=0, max_containers=1,
               scaledown_window=2, volumes={'/models': cache, '/results': results})
 def generate(request: dict, source: bytes = b'') -> dict:
+    from aladin import worker
     from aladin.extra_image_worker import execute
     if request.get('modelId') != MODEL or source:
         raise ValueError('Wrong model or unsupported source image')
     record = execute(request, '/results')
     cache.commit()
     results.commit()
+    worker.done(record)
     return {k: record[k] for k in ('images', 'elapsedSeconds')}

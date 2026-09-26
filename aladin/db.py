@@ -26,7 +26,7 @@ from . import settings
 UPDATABLE = frozenset({
     'state', 'call_id', 'attempts', 'max_attempts', 'lease_owner',
     'lease_expires_at', 'next_poll_at', 'last_error', 'submitted_at',
-    'finished_at', 'image_count',
+    'finished_at', 'image_count', 'timings',
 })
 
 FINISHED_STATES = ('succeeded', 'failed')

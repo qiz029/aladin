@@ -2,6 +2,9 @@
 
 worker 只依赖标准库，能在本地直接跑——容器里的行为不该只能靠"烧一次 GPU"来验证。
 """
+import contextlib
+import io
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -129,3 +132,43 @@ class EarlyPublisherTest(unittest.TestCase):
         publisher.on_event(self._executed('save0'))
         publisher.close()
         self.assertEqual(publisher.done, {}, '失败的那张留给整批结束后的正常流程')
+
+
+class TimingsTest(unittest.TestCase):
+    """容器内计时。worker.py 与 video_worker.py 各有一份，协议必须一致。"""
+
+    def _run(self, module):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            first, second = module.Timings(), module.Timings()
+        self.assertEqual(second.call_index, first.call_index + 1, '同一进程内第二次调用是热容器')
+        line = out.getvalue().splitlines()[0]
+        self.assertIn('"kind": "container"', line)
+
+        graph = {'1': {'class_type': 'UnetLoaderGGUF'}, '2': {'class_type': 'KSampler'}}
+        second.watch(graph, 'p')
+        for event in ({'type': 'executing', 'data': {'prompt_id': 'other', 'node': '9'}},
+                      {'type': 'executing', 'data': {'prompt_id': 'p', 'node': '1'}},
+                      {'type': 'executing', 'data': {'prompt_id': 'p', 'node': '2'}},
+                      {'type': 'execution_success', 'data': {'prompt_id': 'p'}}):
+            second.on_event(event)
+        second.on_event({'type': 'executing', 'data': None})    # 畸形消息不能抛
+        second.mark('execute')
+        record = second.record()
+        self.assertEqual([n['class'] for n in record['nodes']], ['UnetLoaderGGUF', 'KSampler'])
+        self.assertIn('execute', record['phases'])
+        self.assertEqual(record['callIndex'], second.call_index)
+        self.assertLessEqual(record['startedAt'], record['finishedAt'])
+        json.dumps(record, allow_nan=False)                      # 要能写进 result.json
+
+    def test_qwen_and_extra_worker(self):
+        self._run(worker)
+
+    def test_video_worker(self):
+        from aladin import video_worker
+        self._run(video_worker)
+
+    def test_done_line_carries_elapsed(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            worker.done({'elapsedSeconds': 12.5})
+        self.assertIn('"kind": "done"', out.getvalue())
+        self.assertIn('"elapsedSeconds": 12.5', out.getvalue())

@@ -228,6 +228,7 @@ def start_server(root):
 def execute(request, result_root):
     validate(request)
     started = time.time()
+    timings = runtime.Timings()
     output = Path(result_root) / request['key']
     output.mkdir(parents=True, exist_ok=True)
     cached = runtime.receipt_hit(output, request)
@@ -237,17 +238,23 @@ def execute(request, result_root):
     ensure_weights(request['modelId'], root)
     variants = variants_of(request)
     ensure_loras([item for variant in variants for item in variant.get('loras', [])], root)
+    timings.mark('weights')
     process, log = start_server(root)
+    timings.mark('comfyBoot')
     try:
         graph = workflow(request)
         prompt_id, client_id = str(uuid.uuid4()), 'aladin-' + request['key'][:16]
-        handle = runtime.watch_async(runtime.SERVER, prompt_id, runtime.classify(graph), timeout=1800, client_id=client_id)
+        timings.watch(graph, prompt_id)
+        handle = runtime.watch_async(runtime.SERVER, prompt_id, runtime.classify(graph), timeout=1800, client_id=client_id,
+                                     on_event=timings.on_event)
         if not handle.ready.wait(timeout=30):
             raise RuntimeError('Progress subscription failed')
         runtime.submit(graph, client_id, prompt_id)
+        timings.mark('submit')
         history = runtime.wait_for_history(prompt_id, time.time() + 1500)
         if not history or history[prompt_id].get('status', {}).get('status_str') == 'error':
             raise RuntimeError('ComfyUI execution failed: ' + str(history)[:1500])
+        timings.mark('execute')
         images = []
         sampler_name, scheduler = sampling(request)
         for index, variant in enumerate(variants):
@@ -267,7 +274,9 @@ def execute(request, result_root):
             if request['modelId'] == 'pony-realism-2.2':
                 params['clip_skip'] = 2
             images.append(dict(index=index+1, file=name, sha256=runtime.digest(data), bytes=len(data), format='png', prompt=variant['prompt'], seed=variant['seed'], params=params))
-        record = dict(schemaVersion=1, request=request, mode='txt2img', model=request['model'], elapsedSeconds=round(time.time()-started, 2), images=images)
+        timings.mark('outputs')
+        record = dict(schemaVersion=1, request=request, mode='txt2img', model=request['model'], elapsedSeconds=round(time.time()-started, 2), images=images,
+                      serverLogTail=runtime.tail('/tmp/comfy-server.log', 8), timings=timings.record())
         runtime.atomic_json(output / 'result.json', record)
         return record
     except Exception as error:

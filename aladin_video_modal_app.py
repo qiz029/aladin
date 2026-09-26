@@ -64,6 +64,7 @@ def generate(request: dict, source: bytes = b'') -> dict:
             f'{error} | container_worker={video_worker.revision()[:16]} '
             f'request={str(request.get("workerRevision"))[:16]}') from None
     results.commit()
+    video_worker.done(record)
     return {'key': request['key'], 'videos': record['videos'],
             'elapsedSeconds': record['elapsedSeconds']}
 
